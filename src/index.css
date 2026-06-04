@@ -226,7 +226,11 @@ body { font-family: 'Nunito', system-ui, sans-serif; background: var(--chat-bg);
   background: linear-gradient(135deg, #052e16 0%, #14532d 50%, #166534 100%);
 }
 
-/* Notification badge */
+/* Safe area for bottom nav on mobile */
+.safe-area-bottom { padding-bottom: env(safe-area-inset-bottom, 0px); }
+.no-scrollbar::-webkit-scrollbar { display: none; }
+.no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
+
 .badge {
   min-width: 20px; height: 20px;
   background: var(--brand-primary);
