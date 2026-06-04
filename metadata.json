@@ -1,0 +1,11 @@
+{
+  "name": "Family & Friends",
+  "description": "A customized messaging platform featuring UnifyAI via OpenRouter, WebRTC calling, and real-time social connections.",
+  "requestFramePermissions": [
+    "camera",
+    "microphone"
+  ],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
