@@ -422,7 +422,11 @@ function AppInner() {
             {showAddContact ? (
               <AddContact
                 onClose={() => setShowAddContact(false)}
-                onContactAdded={() => setShowAddContact(false)}
+                onContactAdded={(contact) => {
+                  setShowAddContact(false);
+                  // Immediately start a chat with the newly added contact
+                  if (contact) handleSelectChat(contact);
+                }}
               />
             ) : (
               <ChatList

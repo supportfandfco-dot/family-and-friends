@@ -8,9 +8,9 @@ import { useState, useEffect, useRef, useCallback } from 'react';
 import { useAuth } from '../../contexts/AuthContext';
 import {
   db, subscribeToChats, subscribeToGroups, getUserById,
-  subscribeToPresence,
+  subscribeToPresence, setChatPinned, setChatArchived, deleteChatForUser,
+  setGroupPinned, setGroupArchived, deleteGroupForUser,
 } from '../../firebase';
-import { doc, updateDoc } from 'firebase/firestore';
 import { format, isToday, isYesterday } from 'date-fns';
 import {
   Search, Plus, Settings, Phone,
@@ -47,11 +47,8 @@ function getLastMsgPreview(msg, currentUid) {
   }
 }
 
-// ── Archive helpers ───────────────────────────────────────
-async function setArchived(id, isGroup, archived) {
-  const col = isGroup ? 'groups' : 'chats';
-  await updateDoc(doc(db, col, id), { archived });
-}
+// ── Chat action helpers ───────────────────────────────────────
+// (using firebase.js exported functions for consistency)
 
 // ── Long-press hook ───────────────────────────────────────
 function useLongPress(onLongPress, ms = 500) {
@@ -67,23 +64,33 @@ function useLongPress(onLongPress, ms = 500) {
 }
 
 // ── Context menu component ────────────────────────────────
-function ContextMenu({ x, y, item, onClose, onArchive }) {
+function ContextMenu({ x, y, item, isGroup, onClose, onArchive, onPin, onDelete }) {
   const isArchived = item?.archived;
+  const isPinned   = item?.pinned;
   return (
     <div className="fixed inset-0 z-50" onClick={onClose}>
       <div
-        className="absolute bg-[var(--sidebar-bg)] border border-[var(--border)] rounded-2xl shadow-2xl py-1.5 w-48 overflow-hidden"
-        style={{ left: Math.min(x, window.innerWidth - 200), top: Math.min(y, window.innerHeight - 120) }}
+        className="absolute bg-[var(--sidebar-bg)] border border-[var(--border)] rounded-2xl shadow-2xl py-1.5 w-52 overflow-hidden"
+        style={{ left: Math.min(x, window.innerWidth - 220), top: Math.min(y, window.innerHeight - 170) }}
         onClick={e => e.stopPropagation()}
       >
-        <button
-          onClick={() => { onArchive(!isArchived); onClose(); }}
-          className="w-full flex items-center gap-3 px-4 py-2.5 text-sm text-[var(--text-primary)] hover:bg-[var(--hover)] transition-colors"
-        >
+        <button onClick={() => { onPin(!isPinned); onClose(); }}
+          className="w-full flex items-center gap-3 px-4 py-2.5 text-sm text-[var(--text-primary)] hover:bg-[var(--hover)] transition-colors">
+          <Star size={16} className={isPinned ? 'text-yellow-400 fill-yellow-400' : 'text-[var(--text-secondary)]'} />
+          {isPinned ? 'Unpin' : 'Pin'}
+        </button>
+        <button onClick={() => { onArchive(!isArchived); onClose(); }}
+          className="w-full flex items-center gap-3 px-4 py-2.5 text-sm text-[var(--text-primary)] hover:bg-[var(--hover)] transition-colors">
           {isArchived
             ? <><ArchiveRestore size={16} className="text-brand-500" /> Unarchive</>
             : <><Archive size={16} className="text-brand-500" /> Archive</>
           }
+        </button>
+        <div className="h-px bg-[var(--border)] mx-3 my-1" />
+        <button onClick={() => { onDelete(); onClose(); }}
+          className="w-full flex items-center gap-3 px-4 py-2.5 text-sm text-red-400 hover:bg-red-500/10 transition-colors">
+          <Trash2 size={16} className="text-red-400" />
+          Delete {isGroup ? 'Group' : 'Chat'}
         </button>
       </div>
     </div>
@@ -129,11 +136,14 @@ function ChatRow({ chat, partner, isActive, uid, online, onSelect, onLongPress }
           <span className="text-[13px] text-[var(--text-secondary)] truncate">
             {getLastMsgPreview(chat.lastMessage, uid)}
           </span>
-          {unread > 0 && (
-            <span className="ml-2 flex-shrink-0 min-w-[20px] h-5 bg-brand-500 text-white text-[11px] font-bold rounded-full flex items-center justify-center px-1.5">
-              {unread > 99 ? '99+' : unread}
-            </span>
-          )}
+          <div className="flex items-center gap-1.5 flex-shrink-0">
+            {chat.pinned && <span className="text-[10px]">📌</span>}
+            {unread > 0 && (
+              <span className="min-w-[20px] h-5 bg-brand-500 text-white text-[11px] font-bold rounded-full flex items-center justify-center px-1.5">
+                {unread > 99 ? '99+' : unread}
+              </span>
+            )}
+          </div>
         </div>
       </div>
     </button>
@@ -172,11 +182,14 @@ function GroupRow({ group, isActive, uid, onSelect, onLongPress }) {
           <p className="text-[13px] text-[var(--text-secondary)] truncate">
             {group.lastMessage ? getLastMsgPreview(group.lastMessage, uid) : `${group.members?.length || 0} members`}
           </p>
-          {unread > 0 && (
-            <span className="ml-2 flex-shrink-0 min-w-[20px] h-5 bg-brand-500 text-white text-[11px] font-bold rounded-full flex items-center justify-center px-1.5">
-              {unread > 99 ? '99+' : unread}
-            </span>
-          )}
+          <div className="flex items-center gap-1.5 flex-shrink-0">
+            {group.pinned && <span className="text-[10px]">📌</span>}
+            {unread > 0 && (
+              <span className="min-w-[20px] h-5 bg-brand-500 text-white text-[11px] font-bold rounded-full flex items-center justify-center px-1.5">
+                {unread > 99 ? '99+' : unread}
+              </span>
+            )}
+          </div>
         </div>
       </div>
     </button>
@@ -256,14 +269,16 @@ export default function ChatList({ onSelectChat, onSelectGroup, onOpenSettings, 
   // ── Derived lists ─────────────────────────────────────
   const allChats = chats.filter(c => {
     if (c.archived) return false;
+    if (c.deletedFor?.[user?.uid]) return false;
     const p = chatPreviews[c.id];
     return !search || p?.name?.toLowerCase().includes(search.toLowerCase());
-  });
+  }).sort((a, b) => (b.pinned ? 1 : 0) - (a.pinned ? 1 : 0));
   const unreadChats = allChats.filter(c => (c.unread?.[user?.uid] || 0) > 0);
   const allGroups = groups.filter(g => {
     if (g.archived) return false;
+    if (g.deletedFor?.[user?.uid]) return false;
     return !search || g.name?.toLowerCase().includes(search.toLowerCase());
-  });
+  }).sort((a, b) => (b.pinned ? 1 : 0) - (a.pinned ? 1 : 0));
   const unreadGroups = allGroups.filter(g => (g.unread?.[user?.uid] || 0) > 0);
   const archivedChats = chats.filter(c => c.archived);
   const archivedGroups = groups.filter(g => g.archived);
@@ -283,8 +298,21 @@ export default function ChatList({ onSelectChat, onSelectGroup, onOpenSettings, 
 
   const handleArchive = useCallback(async (archived) => {
     if (!menu) return;
-    await setArchived(menu.item.id, menu.isGroup, archived);
+    if (menu.isGroup) await setGroupArchived(menu.item.id, archived);
+    else await setChatArchived(menu.item.id, archived);
   }, [menu]);
+
+  const handlePin = useCallback(async (pinned) => {
+    if (!menu) return;
+    if (menu.isGroup) await setGroupPinned(menu.item.id, pinned);
+    else await setChatPinned(menu.item.id, pinned);
+  }, [menu]);
+
+  const handleDelete = useCallback(async () => {
+    if (!menu || !user) return;
+    if (menu.isGroup) await deleteGroupForUser(menu.item.id, user.uid);
+    else await deleteChatForUser(menu.item.id, user.uid);
+  }, [menu, user]);
 
   // ── Which list to show ────────────────────────────────
   const listItems = () => {
@@ -300,7 +328,7 @@ export default function ChatList({ onSelectChat, onSelectGroup, onOpenSettings, 
   // ── Bottom nav items ──────────────────────────────────
   const bottomTabs = [
     { id: 'chats',   icon: MessageCircle, label: 'Chats',   badge: totalChatUnread },
-    { id: 'moments', icon: Star,          label: 'Moments', badge: 0 },
+    { id: 'tasks',   icon: ListTodo,      label: 'Tasks',   badge: 0 },
     { id: 'command', icon: Zap,           label: 'Command', badge: 0 },
     { id: 'agent',   icon: BotIcon,       label: 'Agent',   badge: 0 },
     { id: 'calls',   icon: Phone,         label: 'Calls',   badge: 0 },
@@ -493,9 +521,9 @@ export default function ChatList({ onSelectChat, onSelectGroup, onOpenSettings, 
       )}
 
       {/* ── Other bottom tab panels ──────────────────────── */}
-      {bottomTab === 'moments' && (
+      {bottomTab === 'tasks' && (
         <div className="flex-1 overflow-y-auto">
-          <StatusTab />
+          <TasksTab />
         </div>
       )}
 
@@ -602,8 +630,12 @@ export default function ChatList({ onSelectChat, onSelectGroup, onOpenSettings, 
           x={menu.x}
           y={menu.y}
           item={menu.item}
+          isGroup={menu.isGroup}
+          uid={user?.uid}
           onClose={() => setMenu(null)}
           onArchive={handleArchive}
+          onPin={handlePin}
+          onDelete={handleDelete}
         />
       )}
 

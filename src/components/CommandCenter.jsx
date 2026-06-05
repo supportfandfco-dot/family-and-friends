@@ -17,6 +17,23 @@ import {
 } from 'firebase/firestore';
 import TasksDashboard from './CommandCenter/TasksDashboard';
 
+
+// ── Confidence badge ──────────────────────────────────────────
+function ConfBadge({ label }) {
+  if (!label) return null;
+  const styles = {
+    high:   'bg-green-500/10 text-green-500',
+    medium: 'bg-orange-500/10 text-orange-400',
+    low:    'bg-[var(--hover)] text-[var(--text-secondary)]',
+  };
+  const labels = { high: '⚡ High', medium: '~ Medium', low: '? Low' };
+  return (
+    <span className={`text-[10px] font-semibold px-2 py-0.5 rounded-full ${styles[label] || styles.low}`}>
+      {labels[label] || label}
+    </span>
+  );
+}
+
 // ── helpers ───────────────────────────────────────────────────
 function toMs(ts) {
   if (!ts) return 0;
@@ -288,6 +305,7 @@ export default function CommandCenter({ chats, groups, user, onSelectChat, onSel
                 <div className="flex items-center justify-between mt-1">
                   <p className="text-[10px] text-[var(--text-secondary)] uppercase tracking-wider">{w.source}</p>
                   <div className="flex items-center gap-2">
+                    <ConfBadge label={w.confidenceLabel} />
                     {w.ts && <p className="text-[10px] text-[var(--text-secondary)]">{fmtTime(w.ts)}</p>}
                     {w.chatId && <p className="text-[10px] text-brand-500">Open →</p>}
                   </div>
@@ -312,6 +330,7 @@ export default function CommandCenter({ chats, groups, user, onSelectChat, onSel
                 <div className="flex items-center justify-between mt-1">
                   <p className="text-[10px] text-[var(--text-secondary)] uppercase tracking-wider">in {w.source}</p>
                   <div className="flex items-center gap-2">
+                    <ConfBadge label={w.confidenceLabel} />
                     {w.ts && <p className="text-[10px] text-[var(--text-secondary)]">{fmtTime(w.ts)}</p>}
                     {w.chatId && <p className="text-[10px] text-brand-500">Open →</p>}
                   </div>

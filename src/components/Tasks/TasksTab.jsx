@@ -365,6 +365,15 @@ function TaskCard({ task, onToggle, onDelete, onSyncGoogle, onNavigate }) {
                  <MessageCircle size={10} /> {task.source}
                </span>
             )}
+            {task.confidenceLabel && !expanded && (
+              <span className={`text-[10px] font-semibold px-1.5 py-0.5 rounded-full ${
+                task.confidenceLabel === 'high' ? 'bg-green-500/10 text-green-500' :
+                task.confidenceLabel === 'medium' ? 'bg-orange-500/10 text-orange-400' :
+                'bg-[var(--hover)] text-[var(--text-secondary)]'
+              }`}>
+                {task.confidenceLabel === 'high' ? '⚡ High' : task.confidenceLabel === 'medium' ? '~ Medium' : '? Low'}
+              </span>
+            )}
           </div>
         </div>
       </div>

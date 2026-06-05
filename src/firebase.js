@@ -521,6 +521,37 @@ export function subscribeToFFTasks(uid, callback) {
   return onSnapshot(q, snap => callback(snap.docs.map(d => ({ id: d.id, ...d.data() }))));
 }
 
+// ── Chat / Group management ───────────────────────────────────
+export async function setChatPinned(chatId, pinned) {
+  await updateDoc(doc(db, 'chats', chatId), { pinned: pinned || false });
+}
+
+export async function setChatArchived(chatId, archived) {
+  await updateDoc(doc(db, 'chats', chatId), { archived: archived || false });
+}
+
+export async function deleteChatForUser(chatId, uid) {
+  // Soft delete: mark as deleted for this user only
+  await updateDoc(doc(db, 'chats', chatId), {
+    [`deletedFor.${uid}`]: true,
+    [`deletedAt.${uid}`]: serverTimestamp(),
+  });
+}
+
+export async function setGroupPinned(groupId, pinned) {
+  await updateDoc(doc(db, 'groups', groupId), { pinned: pinned || false });
+}
+
+export async function setGroupArchived(groupId, archived) {
+  await updateDoc(doc(db, 'groups', groupId), { archived: archived || false });
+}
+
+export async function deleteGroupForUser(groupId, uid) {
+  await updateDoc(doc(db, 'groups', groupId), {
+    [`deletedFor.${uid}`]: true,
+  });
+}
+
 // ── Google Sign-In ─────────────────────────────────────────────
 const googleProvider = new GoogleAuthProvider();
 googleProvider.setCustomParameters({ prompt: 'select_account' });

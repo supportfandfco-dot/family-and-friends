@@ -226,10 +226,15 @@ export function useIntelligenceEngine(uid) {
       const commitments = res.commitments || [];
       const decisions   = res.decisions   || [];
 
+      // Confidence classification
+      const rawConf = msg._confidence || 0;
+      const confScore = Math.round(Math.min(rawConf * 100, 99));
+      const confLabel = confScore >= 70 ? 'high' : confScore >= 45 ? 'medium' : 'low';
+
       // Navigation metadata — stored on every entity so "open source" always works
       const navMeta = {
-        sourceType: msg.chatType,          // 'direct' | 'group'
-        sourceId:   msg.chatId,            // chatId or groupId
+        sourceType: msg.chatType,
+        sourceId:   msg.chatId,
         chatId:     msg.chatId,
         chatType:   msg.chatType,
         messageId:  msg.msgId,
@@ -237,9 +242,16 @@ export function useIntelligenceEngine(uid) {
         senderName: msg.senderName,
         source:     msg.sourceName,
         ts:         toMs(msg.timestamp) || Date.now(),
+        confidenceScore: confScore,
+        confidenceLabel: confLabel,
       };
 
-      // Tasks → subcollection (still one write each, unavoidable)
+      // Skip low-confidence Groq results — don't write noise to Firestore
+      if (confLabel === 'low' && !tasks.length && !commitments.length && !decisions.length) {
+        markProcessed(`${msg.chatId}-${msg.msgId}`);
+        continue;
+      }
+
       for (const t of tasks) {
         newTasks.push({
           title: t,
@@ -248,6 +260,8 @@ export function useIntelligenceEngine(uid) {
           type: msg.chatType,
           messageId: msg.msgId,
           senderId: msg.senderId,
+          confidenceScore: confScore,
+          confidenceLabel: confLabel,
         });
       }
 
