@@ -531,10 +531,10 @@ export async function setChatArchived(chatId, archived) {
 }
 
 export async function deleteChatForUser(chatId, uid) {
-  // Soft delete: mark as deleted for this user only
+  // Soft delete: mark as deleted for this user only, with timestamp
+  // When a new message arrives AFTER this timestamp, the chat reappears
   await updateDoc(doc(db, 'chats', chatId), {
-    [`deletedFor.${uid}`]: true,
-    [`deletedAt.${uid}`]: serverTimestamp(),
+    [`deletedFor.${uid}`]: serverTimestamp(),
   });
 }
 
@@ -548,7 +548,7 @@ export async function setGroupArchived(groupId, archived) {
 
 export async function deleteGroupForUser(groupId, uid) {
   await updateDoc(doc(db, 'groups', groupId), {
-    [`deletedFor.${uid}`]: true,
+    [`deletedFor.${uid}`]: serverTimestamp(),
   });
 }
 

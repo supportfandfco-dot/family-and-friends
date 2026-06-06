@@ -36,12 +36,15 @@ export const ROUTING = {
   SIMPLE_PROMPT_LENGTH: 200,
   // Prompts longer than this → full multi-model synthesis
   COMPLEX_PROMPT_LENGTH: 400,
-  // AI timeout — fall back to local if exceeded
-  TIMEOUT_MS: 5000,
+  // AI timeout — 15s for large models, was 5s which caused too many fallbacks
+  TIMEOUT_MS: 15000,
   // Cache TTL
   CACHE_TTL_MS: 10 * 60 * 1000, // 10 minutes
   // Debounce for typing-triggered AI
   DEBOUNCE_MS: 800,
+  // Max retries on 429/503
+  MAX_RETRIES: 2,
+  RETRY_DELAY_MS: 1000,
 };
 
 // ── Keywords that trigger deep reasoning ──────────────────────

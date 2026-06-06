@@ -468,7 +468,7 @@ function MessageBubble({ msg, isOwn, onLongPress, onReaction, selected, selectio
               </div>
             </a>
           ) : (
-            <span style={{whiteSpace:'pre-wrap'}}>{msg.content}</span>
+            <span style={{whiteSpace:'pre-wrap', wordBreak:'break-word', overflowWrap:'anywhere'}}>{msg.content}</span>
           )}
           {msg.edited && !isDeleted && <span className="text-[10px] opacity-40 ml-1">· edited</span>}
           {/* Timestamp + ticks */}
@@ -1075,7 +1075,7 @@ export default function ChatWindow({ chatPartner, onBack, onVoiceCall, onVideoCa
 
   // ══════════════════════════════════════════════════
   return (
-    <div className="flex flex-col h-full chat-bg relative" style={{ background: wallpaperBg }} onClick={closeAll}>
+    <div className="flex flex-col chat-bg relative" style={{ background: wallpaperBg, height: '100dvh', maxHeight: '100dvh', overflow: 'hidden' }} onClick={closeAll}>
 
       {/* SELECTION BAR */}
       {selectionMode && (
@@ -1343,8 +1343,8 @@ export default function ChatWindow({ chatPartner, onBack, onVoiceCall, onVideoCa
           msg={selectedMsg}
           isOwn={selectedMsg.senderId === user.uid}
           onClose={() => setSelectedMsg(null)}
-          onReply={() => { setReplyTo(selectedMsg); setSelectedMsg(null); }}
-          onEdit={() => { setEditingMsg(selectedMsg); setEditText(selectedMsg.content); setSelectedMsg(null); }}
+          onReply={() => { setEditingMsg(null); setEditText(''); setReplyTo(selectedMsg); setSelectedMsg(null); }}
+          onEdit={() => { setReplyTo(null); setEditingMsg(selectedMsg); setEditText(selectedMsg.content); setSelectedMsg(null); }}
           onDeleteMe={() => handleDelete(selectedMsg, false)}
           onDeleteAll={() => handleDelete(selectedMsg, true)}
           onForward={() => { setForwardMsgs([selectedMsg]); setSelectedMsg(null); }}
