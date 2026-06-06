@@ -115,6 +115,8 @@ export function useWebRTC(currentUserId) {
           localVideoRef.current.muted = true;
         }
         console.log('Got stream with video:', !!constraints.video);
+        // Ensure audio tracks start enabled (some Android devices start muted)
+        stream.getAudioTracks().forEach(t => { t.enabled = true; });
         return stream;
       } catch (err) {
         console.warn('Stream attempt failed:', err.name);
@@ -138,10 +140,13 @@ export function useWebRTC(currentUserId) {
     const pc = new RTCPeerConnection(ICE_SERVERS);
     pcRef.current = pc;
 
-    // Add local tracks
+    // Add local tracks — add all currently available tracks
     if (localStreamRef.current) {
+      const existingSenders = pc.getSenders();
       localStreamRef.current.getTracks().forEach(track => {
-        pc.addTrack(track, localStreamRef.current);
+        // Avoid adding duplicate tracks
+        const alreadyAdded = existingSenders.some(s => s.track?.id === track.id);
+        if (!alreadyAdded) pc.addTrack(track, localStreamRef.current);
       });
     }
 
@@ -298,11 +303,15 @@ export function useWebRTC(currentUserId) {
 
   // ── Toggle mute ──────────────────────────────────────
   const toggleMute = useCallback(() => {
-    if (localStreamRef.current) {
-      localStreamRef.current.getAudioTracks().forEach(t => { t.enabled = !t.enabled; });
-      setIsMuted(m => !m);
+    const tracks = localStreamRef.current?.getAudioTracks() || [];
+    if (tracks.length === 0) {
+      console.warn('toggleMute: no audio tracks found');
+      return;
     }
-  }, []);
+    const newMuted = !isMuted;
+    tracks.forEach(t => { t.enabled = !newMuted; });
+    setIsMuted(newMuted);
+  }, [isMuted]);
 
   // ── Toggle camera ────────────────────────────────────
   const toggleCamera = useCallback(() => {

@@ -9,7 +9,7 @@ import {
   ArrowRight, RefreshCw,
 } from 'lucide-react';
 import {
-  db, auth,
+  db, auth, getUserById,
 } from '../firebase';
 import {
   doc, onSnapshot, getDoc, collection, query,

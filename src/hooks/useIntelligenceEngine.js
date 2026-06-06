@@ -460,22 +460,23 @@ async function saveWaitingItem({ uid, chatId, chatType, sourceName, senderName, 
     const ccRef = doc(db, 'users', uid, 'commandCenter', 'data');
     const snap = await getDoc(ccRef);
     const existing = snap.exists() ? snap.data() : {};
-    // Dedup: one entry per chatId — newer question replaces older
+    // Dedup: one entry per chatId — newer replaces older
     const prev = (existing.waitingFor || []).filter(w => w.chatId !== chatId);
     const entry = {
       chatId,
       chatType: chatType || 'direct',
       source: sourceName || 'Chat',
       senderName: senderName || 'Someone',
-      text: text ? (text.length > 100 ? text.slice(0, 100) + '…' : text) : '',
+      text: text ? text.slice(0, 100) : '',
       ts: toMs(timestamp) || Date.now(),
       msgId: msgId || '',
     };
+    // Use setDoc with merge to be atomic — never addDoc which could duplicate
     await setDoc(ccRef, {
       waitingFor: [entry, ...prev].slice(0, 10),
       lastUpdated: Date.now(),
     }, { merge: true });
   } catch {
-    // Silent — never crash the app over intelligence writes
+    // Silent — intelligence writes never crash the app
   }
 }

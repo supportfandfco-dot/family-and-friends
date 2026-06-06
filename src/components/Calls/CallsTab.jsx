@@ -6,14 +6,15 @@ import { useState, useEffect, useCallback } from 'react';
 import {
   Phone, Video, PhoneCall, PhoneMissed, PhoneIncoming,
   Search, Clock, Users, LogIn, Video as VideoIcon,
-  ArrowLeft, Copy, Check, RefreshCw, Plus, X,
+  Copy, Check, RefreshCw, X,
 } from 'lucide-react';
 import { useAuth } from '../../contexts/AuthContext';
-import { db, getUserById } from '../../firebase';
+import { db } from '../../firebase';
 import {
-  collection, query, orderBy, limit, onSnapshot, addDoc, serverTimestamp,
+  collection, query, orderBy, limit, onSnapshot,
 } from 'firebase/firestore';
 import toast from 'react-hot-toast';
+import MeetingRoom from './MeetingRoom';
 
 // ── Helpers ───────────────────────────────────────────
 function timeAgo(ts) {
@@ -97,11 +98,10 @@ export default function CallsTab({ contacts = [], onVoiceCall, onVideoCall }) {
   const [tab, setTab]         = useState('recents');
   const [search, setSearch]   = useState('');
   const [logs, setLogs]       = useState([]);
-  const [roomCode, setRoomCode]   = useState('');
-  const [joinCode, setJoinCode]   = useState('');
-  const [copied, setCopied]       = useState(false);
-  const [meetingView, setMeetingView] = useState('create'); // create | join
-  const [joinView, setJoinView]   = useState(false);
+  const [roomCode, setRoomCode]       = useState('');
+  const [joinCode, setJoinCode]       = useState('');
+  const [copied, setCopied]           = useState(false);
+  const [meetingRoom, setMeetingRoom] = useState(null); // { code, isHost }
 
   // ── Load call logs from Firestore ──────────────────────
   useEffect(() => {
@@ -127,25 +127,19 @@ export default function CallsTab({ contacts = [], onVoiceCall, onVideoCall }) {
   );
 
   const handleCopyCode = () => {
-    navigator.clipboard.writeText(roomCode).then(() => {
-      setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
-    }).catch(() => toast.error('Could not copy — please copy manually'));
+    navigator.clipboard.writeText(roomCode)
+      .then(() => { setCopied(true); setTimeout(() => setCopied(false), 2000); })
+      .catch(() => toast.error('Could not copy — please copy manually'));
   };
 
   const handleJoinMeeting = () => {
     const code = joinCode.trim().toUpperCase();
     if (!code) { toast.error('Enter a room code first'); return; }
-    // Share the code in the format FF-XXXX-XXXX; open group call screen
-    // The meeting room code IS the room ID — pass to onVideoCall with a synthetic contact
-    onVideoCall?.({ id: code, name: `Meeting ${code}`, isMeeting: true, meetingCode: code });
-    toast.success(`Joining room ${code}…`);
+    setMeetingRoom({ code, isHost: false });
   };
 
   const handleStartMeeting = () => {
-    // Start a video meeting with self-generated room code
-    onVideoCall?.({ id: roomCode, name: `Meeting ${roomCode}`, isMeeting: true, meetingCode: roomCode, isHost: true });
-    toast.success(`Starting meeting ${roomCode}…`);
+    setMeetingRoom({ code: roomCode, isHost: true });
   };
 
   const TABS = [
@@ -337,6 +331,21 @@ export default function CallsTab({ contacts = [], onVoiceCall, onVideoCall }) {
           </div>
         )}
       </div>
+
+      {/* Meeting Room Overlay */}
+      {meetingRoom && (
+        <MeetingRoom
+          meetingCode={meetingRoom.code}
+          isHost={meetingRoom.isHost}
+          onStartCall={() => {
+            setMeetingRoom(null);
+            onVideoCall?.({ id: meetingRoom.code, name: `Meeting ${meetingRoom.code}`, isMeeting: true, isHost: meetingRoom.isHost });
+          }}
+          onClose={() => setMeetingRoom(null)}
+        />
+      )}
     </div>
   );
 }
+
+export default CallsTab;
