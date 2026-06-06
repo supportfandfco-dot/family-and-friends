@@ -148,20 +148,32 @@ export async function sendMessage(chatId, senderId, content, type = 'text', extr
     reactions: {},
     ...extra
   });
-  
-  // Extract partnerId from chatId
-  const participants = chatId.split('_');
-  const partnerId = participants.find(id => id !== senderId);
+
+  // Get sender profile for senderName in lastMessage
+  let senderName = '';
+  try {
+    const senderSnap = await getDoc(doc(db, 'users', senderId));
+    senderName = senderSnap.data()?.name || '';
+  } catch {}
+
+  // Get participants from the chat doc (reliable, not chatId splitting)
+  let participantIds = chatId.split('_'); // fallback
+  try {
+    const chatSnap = await getDoc(doc(db, 'chats', chatId));
+    if (chatSnap.exists()) {
+      participantIds = chatSnap.data().participants || participantIds;
+    }
+  } catch {}
 
   const updates = {
-    lastMessage: { content, type, senderId, timestamp: serverTimestamp() }
+    lastMessage: { content, type, senderId, senderName, timestamp: serverTimestamp(), id: msgRef.id }
   };
-  
-  if (partnerId) {
-    updates[`unread.${partnerId}`] = increment(1);
-  }
 
-  // setDoc with merge=true works even if the doc was just created — avoids race with updateDoc
+  // Increment unread for all participants except sender
+  participantIds.forEach(uid => {
+    if (uid !== senderId) updates[`unread.${uid}`] = increment(1);
+  });
+
   await setDoc(doc(db, 'chats', chatId), updates, { merge: true });
   return msgRef.id;
 }
@@ -204,17 +216,27 @@ export async function sendGroupMessage(groupId, senderId, content, type = 'text'
     seenBy: [senderId],
     ...extra
   });
-  
+
+  // Get sender name for lastMessage display
+  let senderName = extra.senderName || '';
+  if (!senderName) {
+    try {
+      const senderSnap = await getDoc(doc(db, 'users', senderId));
+      senderName = senderSnap.data()?.name || '';
+    } catch {}
+  }
+
   const updates = {
-    lastMessage: { content, type, senderId, timestamp: serverTimestamp() }
+    lastMessage: { content, type, senderId, senderName, timestamp: serverTimestamp(), id: msgRef.id }
   };
-  
+
   // Increment unread for all members except sender
   groupMembers.forEach(memberId => {
     if (memberId !== senderId) {
       updates[`unread.${memberId}`] = increment(1);
     }
   });
+
 
   await setDoc(doc(db, 'groups', groupId), updates, { merge: true });
   return msgRef.id;

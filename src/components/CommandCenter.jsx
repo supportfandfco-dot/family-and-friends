@@ -166,27 +166,33 @@ export default function CommandCenter({ chats, groups, user, onSelectChat, onSel
   // question was asked and user never replied
   const unansweredQs = ccData?.waitingFor || [];
 
-  // ── navigation helper — robust, never fails silently ──────────
+  // ── navigation helper — resolves partner profile before navigating ──
   const openChat = useCallback(async (id, isGroup) => {
     if (!id) return;
     if (isGroup) {
       const g = (groups || []).find(g => g.id === id);
       if (g) { onSelectGroup(g); return; }
-      // Group not in list yet — fetch it
       try {
         const snap = await getDoc(doc(db, 'groups', id));
         if (snap.exists()) onSelectGroup({ id: snap.id, ...snap.data() });
       } catch {}
     } else {
-      const c = (chats || []).find(c => c.id === id);
-      if (c) { onSelectChat(c); return; }
-      // Chat not in list yet — fetch it
+      const chatDoc = (chats || []).find(c => c.id === id);
+      const uid = user?.uid;
+      // Resolve the partner (the other participant) profile
+      const partnerId = chatDoc?.participants?.find(p => p !== uid)
+        || id.split('_').find(p => p !== uid);
+      if (!partnerId) return;
       try {
-        const snap = await getDoc(doc(db, 'chats', id));
-        if (snap.exists()) onSelectChat({ id: snap.id, ...snap.data() });
-      } catch {}
+        const { getUserById } = await import('../firebase');
+        const partner = await getUserById(partnerId);
+        if (partner) onSelectChat(partner, id);
+      } catch {
+        // Fallback: at minimum pass the id so chat can load
+        onSelectChat({ id: partnerId }, id);
+      }
     }
-  }, [chats, groups, onSelectChat, onSelectGroup]);
+  }, [chats, groups, user, onSelectChat, onSelectGroup]);
 
   // ── loading ───────────────────────────────────────────────────
   if (ccLoading) {

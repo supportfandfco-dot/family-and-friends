@@ -176,6 +176,8 @@ function AppInner() {
 
   // ── Navigation ────────────────────────────────────────
   const handleSelectChat = useCallback((partner, chatId) => {
+    // Guard: never open a chat with an unloaded/undefined partner
+    if (!partner?.id && !partner?.uid) return;
     setShowSettings(false);
     setActiveChat({ type: 'chat', data: partner, id: chatId });
   }, []);

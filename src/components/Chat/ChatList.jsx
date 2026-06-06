@@ -23,6 +23,7 @@ import TasksTab from '../Tasks/TasksTab';
 import { CreateGroupModal } from '../Groups/GroupChat';
 import CommandCenter from '../CommandCenter';
 import AIHubTab from '../AIHub/AIHubTab';
+import CallsTab from '../Calls/CallsTab';
 
 // ── AI Hub Panel — groups Command Center, Tasks, Agent ────────
 function AIHubPanel({ chats, groups, user, onSelectChat, onSelectGroup }) {
@@ -142,7 +143,7 @@ function ChatRow({ chat, partner, isActive, uid, online, onSelect, onLongPress }
   return (
     <button
       {...lp}
-      onClick={() => onSelect(partner, chat.id)}
+      onClick={() => { if (!partner?.id) return; onSelect(partner, chat.id); }}
       className="w-full flex items-center gap-3 px-4 py-3 transition-all active:scale-[0.98] touch-none"
       style={{
         background: isActive ? 'var(--hover)' : 'transparent',
@@ -164,7 +165,7 @@ function ChatRow({ chat, partner, isActive, uid, online, onSelect, onLongPress }
       <div className="flex-1 min-w-0">
         <div className="flex items-center justify-between">
           <span className={`font-semibold truncate ${unread ? 'text-[var(--text-primary)]' : 'text-[var(--text-primary)]'}`}>
-            {partner?.name || 'Loading...'}
+            {partner?.name || <span className="inline-block w-20 h-3 bg-[var(--border)] rounded animate-pulse" />}
           </span>
           <span className={`text-[11px] ml-2 flex-shrink-0 ${unread ? 'text-brand-500 font-semibold' : 'text-[var(--text-secondary)]'}`}>
             {formatLastTime(chat.lastMessage?.timestamp)}
@@ -279,17 +280,29 @@ export default function ChatList({ onSelectChat, onSelectGroup, onOpenSettings, 
       .then(list => setContacts(list.filter(Boolean)));
   }, [profile?.contacts]);
 
-  // Load chat partner profiles
+  // Load chat partner profiles — batch load to prevent ghost chats
   useEffect(() => {
     if (!user || !chats.length) return;
-    chats.forEach(async chat => {
+    const missing = chats.filter(c => {
+      const pid = c.participants?.find(id => id !== user.uid);
+      return pid && !chatPreviews[c.id];
+    });
+    if (!missing.length) return;
+    Promise.all(missing.map(async chat => {
       const partnerId = chat.participants?.find(id => id !== user.uid);
-      if (partnerId && !chatPreviews[chat.id]) {
-        const p = await getUserById(partnerId);
-        if (p) setChatPreviews(prev => ({ ...prev, [chat.id]: p }));
+      if (!partnerId) return null;
+      const p = await getUserById(partnerId);
+      return p ? { chatId: chat.id, profile: p } : null;
+    })).then(results => {
+      const updates = {};
+      results.filter(Boolean).forEach(({ chatId, profile }) => {
+        updates[chatId] = profile;
+      });
+      if (Object.keys(updates).length) {
+        setChatPreviews(prev => ({ ...prev, ...updates }));
       }
     });
-  }, [chats, user]);
+  }, [chats.map(c => c.id).join(','), user?.uid]);
 
   // Presence
   useEffect(() => {
@@ -628,51 +641,14 @@ export default function ChatList({ onSelectChat, onSelectGroup, onOpenSettings, 
       )}
 
       {bottomTab === 'calls' && (
-        <div className="flex-1 overflow-y-auto">
-          <div className="px-4 pt-4 pb-2">
-            <p className="text-xs font-bold text-[var(--text-secondary)] uppercase tracking-widest">Contacts</p>
-          </div>
-          {contacts.length === 0 ? (
-            <div className="flex flex-col items-center justify-center p-10 mt-6 gap-3">
-              <div className="w-14 h-14 rounded-2xl bg-[var(--hover)] flex items-center justify-center">
-                <Phone size={24} className="text-brand-500 opacity-70" />
-              </div>
-              <p className="text-sm font-medium text-[var(--text-primary)]">No contacts yet</p>
-              <p className="text-xs text-[var(--text-secondary)] text-center max-w-[200px]">Add contacts to start making voice and video calls</p>
-            </div>
-          ) : (
-            contacts.map(contact => (
-              <div key={contact.id} className="flex items-center gap-3 px-4 py-3 hover:bg-[var(--hover)] transition-all">
-                {contact.avatar || contact.photoURL ? (
-                  <img src={contact.avatar || contact.photoURL} className="w-12 h-12 rounded-full object-cover flex-shrink-0" />
-                ) : (
-                  <div className="w-12 h-12 rounded-full bg-gradient-to-br from-brand-400 to-brand-600 flex items-center justify-center text-white font-bold text-lg flex-shrink-0">
-                    {contact.name?.[0]?.toUpperCase() || '?'}
-                  </div>
-                )}
-                <div className="flex-1 min-w-0">
-                  <p className="font-semibold text-sm text-[var(--text-primary)] truncate">{contact.name}</p>
-                  <p className="text-xs text-[var(--text-secondary)] truncate">{contact.phone || contact.email || 'Family & Friends'}</p>
-                </div>
-                <div className="flex items-center gap-2">
-                  <button
-                    onClick={() => {
-                      // Find the chat with this contact and trigger voice call
-                      const chat = chats.find(c => c.participants?.includes(contact.id));
-                      if (chat) onSelectChat(contact, chat.id, 'voice');
-                    }}
-                    className="w-9 h-9 rounded-full bg-brand-500/10 hover:bg-brand-500/20 flex items-center justify-center transition-all"
-                  >
-                    <Phone size={16} className="text-brand-500" />
-                  </button>
-                </div>
-              </div>
-            ))
-          )}
+        <div className="flex-1 overflow-hidden flex flex-col">
+          <CallsTab
+            contacts={contacts}
+            onVoiceCall={(contact) => { /* voice call handled by parent */ }}
+            onVideoCall={(contact) => { /* video call handled by parent */ }}
+          />
         </div>
-      )}
-
-      {/* ── Bottom navigation bar ────────────────────────── */}
+      )}{/* ── Bottom navigation bar ────────────────────────── */}
       <div className="flex-shrink-0 border-t border-[var(--border)] bg-[var(--sidebar-bg)] flex items-center safe-area-bottom">
         {bottomTabs.map(t => {
           const active = bottomTab === t.id;
