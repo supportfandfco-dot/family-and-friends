@@ -148,7 +148,7 @@ async function handleMessage({ uid, profile, chatId, chat, lastMsg, mode }) {
   if (effectiveMode === 'disabled') return;
 
   const actionMode  = (quiet && effectiveMode === 'auto') ? 'approval' : effectiveMode;
-  const rules       = profile?.autoPilotRules || '';
+  const rules       = profile?.autoPilotRules || 'Reply naturally and helpfully based on the conversation context.';
   const senderName  = lastMsg.senderName || 'Someone';
 
   // ── CRITICAL FIX: Fetch real conversation history ──────────
@@ -191,7 +191,11 @@ async function handleMessage({ uid, profile, chatId, chat, lastMsg, mode }) {
     };
 
     if (res.mode === 'auto' && actionMode === 'auto') {
-      await sendMessage(chatId, uid, res.reply, 'text');
+      // Tag message as AI-agent-sent so ChatWindow can show the indicator
+      await sendMessage(chatId, uid, res.reply, 'text', {
+        isAgentMsg: true,
+        agentReason: res.reason || 'Auto rule matched',
+      });
       await addDoc(collection(db, 'users', uid, 'agentLogs'), { ...logEntry, status: 'auto_sent' });
       toast(`🤖 Agent replied to ${senderName}`, { duration: 3000 });
     } else {

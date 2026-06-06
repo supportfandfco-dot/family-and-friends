@@ -130,19 +130,22 @@ export default function CallsTab({ contacts = [], onVoiceCall, onVideoCall }) {
     navigator.clipboard.writeText(roomCode).then(() => {
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
-    });
+    }).catch(() => toast.error('Could not copy — please copy manually'));
   };
 
   const handleJoinMeeting = () => {
-    if (!joinCode.trim()) { toast.error('Enter a room code'); return; }
-    // Open meeting in new tab — FF uses WebRTC, meeting link resolves to the room
     const code = joinCode.trim().toUpperCase();
+    if (!code) { toast.error('Enter a room code first'); return; }
+    // Share the code in the format FF-XXXX-XXXX; open group call screen
+    // The meeting room code IS the room ID — pass to onVideoCall with a synthetic contact
+    onVideoCall?.({ id: code, name: `Meeting ${code}`, isMeeting: true, meetingCode: code });
     toast.success(`Joining room ${code}…`);
   };
 
   const handleStartMeeting = () => {
-    toast.success(`Room ${roomCode} created — share the code with friends!`);
-    // In production this would open the WebRTC room
+    // Start a video meeting with self-generated room code
+    onVideoCall?.({ id: roomCode, name: `Meeting ${roomCode}`, isMeeting: true, meetingCode: roomCode, isHost: true });
+    toast.success(`Starting meeting ${roomCode}…`);
   };
 
   const TABS = [

@@ -327,7 +327,7 @@ function PhotoViewer({ images, startIndex, onClose, onAnalyze }) {
         </span>
         <div className="flex gap-3 items-center">
           {onAnalyze && (
-            <button onClick={() => { onClose(); onAnalyze(cur.content); }}
+            <button onClick={() => { onAnalyze(cur.content); }}
               className="w-9 h-9 rounded-full bg-brand-500 hover:bg-brand-400 flex items-center justify-center text-white transition-all active:scale-95 shadow-[0_0_15px_rgba(99,14,212,0.6)]">
               <Sparkles size={16}/>
             </button>
@@ -429,6 +429,12 @@ function MessageBubble({ msg, isOwn, onLongPress, onReaction, selected, selectio
         {msg.forwarded && !isDeleted && (
           <div className="flex items-center gap-1 text-[10px] text-[var(--text-secondary)] mb-0.5 px-1">
             <Share2 size={9}/> Forwarded
+          </div>
+        )}
+        {/* AI Agent label */}
+        {msg.isAgentMsg && !isDeleted && (
+          <div className="flex items-center gap-1 text-[10px] text-brand-500 mb-0.5 px-1 font-semibold">
+            <span>🤖</span> Sent by AI Agent
           </div>
         )}
         {/* Reply preview */}
@@ -736,9 +742,19 @@ export default function ChatWindow({ chatPartner, onBack, onVoiceCall, onVideoCa
     if (!chatId) return;
     const unsub = subscribeToMessages(chatId, msgs => {
       setMessages(msgs);
-      markMessagesRead(chatId, user.uid, false).catch(()=>{});
+      // Only mark read if the document is visible (user is actively looking at it)
+      if (document.visibilityState === 'visible') {
+        markMessagesRead(chatId, user.uid, false).catch(() => {});
+      }
     });
-    return unsub;
+    // Also mark read when user returns to tab
+    const onVisible = () => {
+      if (document.visibilityState === 'visible' && chatId) {
+        markMessagesRead(chatId, user.uid, false).catch(() => {});
+      }
+    };
+    document.addEventListener('visibilitychange', onVisible);
+    return () => { unsub(); document.removeEventListener('visibilitychange', onVisible); };
   }, [chatId]);
 
   // Presence — RTDB last_changed is stored as ms timestamp (number)
@@ -1375,7 +1391,7 @@ export default function ChatWindow({ chatPartner, onBack, onVoiceCall, onVideoCa
           images={photoViewer.images}
           startIndex={photoViewer.startIndex}
           onClose={() => setPhotoViewer(null)}
-          onAnalyze={(b64) => setMediaAIImage(b64)} />
+          onAnalyze={(b64) => { setMediaAIImage(b64); setShowMediaAI(true); }} />
       )}
 
       {/* CONFIRM SHEET */}

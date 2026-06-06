@@ -238,7 +238,7 @@ function GroupRow({ group, isActive, uid, onSelect, onLongPress }) {
 // ═══════════════════════════════════════════════════════
 //  Main component
 // ═══════════════════════════════════════════════════════
-export default function ChatList({ onSelectChat, onSelectGroup, onOpenSettings, activeChat, onAddContact }) {
+export default function ChatList({ onSelectChat, onSelectGroup, onOpenSettings, activeChat, onAddContact, onVoiceCall, onVideoCall }) {
   const { user, profile } = useAuth();
 
   // Bottom nav tab
@@ -644,8 +644,8 @@ export default function ChatList({ onSelectChat, onSelectGroup, onOpenSettings, 
         <div className="flex-1 overflow-hidden flex flex-col">
           <CallsTab
             contacts={contacts}
-            onVoiceCall={(contact) => { /* voice call handled by parent */ }}
-            onVideoCall={(contact) => { /* video call handled by parent */ }}
+            onVoiceCall={onVoiceCall}
+            onVideoCall={onVideoCall}
           />
         </div>
       )}{/* ── Bottom navigation bar ────────────────────────── */}

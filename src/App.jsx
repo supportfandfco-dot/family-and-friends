@@ -437,6 +437,8 @@ function AppInner() {
                 onOpenSettings={() => { setShowSettings(true); setActiveChat(null); }}
                 activeChat={activeChat}
                 onAddContact={() => setShowAddContact(true)}
+                onVoiceCall={handleVoiceCall}
+                onVideoCall={handleVideoCall}
               />
             )}
           </div>
