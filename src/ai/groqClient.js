@@ -6,6 +6,36 @@ import { GROQ_ENDPOINT, GROQ_MODELS, ROUTING } from './aiConfig.js';
 import { getCached, setCache } from './responseCache.js';
 import { SYSTEM_BASE } from './promptTemplates.js';
 
+// ── Startup API check (runs once, logs result to console) ────
+let _apiChecked = false;
+async function checkApiOnce() {
+  if (_apiChecked) return;
+  _apiChecked = true;
+  try {
+    const res = await fetch(GROQ_ENDPOINT, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model: GROQ_MODELS.fast.id,
+        messages: [{ role: 'user', content: 'hi' }],
+        max_tokens: 5,
+      }),
+    });
+    const data = await res.json();
+    if (res.ok && data.choices) {
+      console.log('[AI] ✅ Groq API reachable');
+    } else {
+      console.error('[AI] ❌ Groq API error:', data.error?.message || res.status,
+        '— Check GROQ_API_KEY in Cloudflare Pages → Settings → Environment Variables');
+    }
+  } catch (e) {
+    console.error('[AI] ❌ Cannot reach /api/groq:', e.message,
+      '— Ensure functions/api/groq.js is deployed to Cloudflare');
+  }
+}
+// Run check after page load
+if (typeof window !== 'undefined') setTimeout(checkApiOnce, 3000);
+
 // ── Core request with timeout + retry ────────────────────────
 async function groqRequest(model, messages, maxTokens, signal, attempt = 0) {
   const controller = new AbortController();
@@ -34,7 +64,11 @@ async function groqRequest(model, messages, maxTokens, signal, attempt = 0) {
     }
 
     const data = await res.json();
-    if (!res.ok || data.error) throw new Error(data.error?.message || `Groq ${res.status}`);
+    if (!res.ok || data.error) {
+      const errMsg = data.error?.message || `Groq HTTP ${res.status}`;
+      console.error('[Groq] API error:', errMsg, '| status:', res.status);
+      throw new Error(errMsg);
+    }
     const text = data.choices?.[0]?.message?.content?.trim();
     if (!text) throw new Error('Empty response from Groq');
     return text;

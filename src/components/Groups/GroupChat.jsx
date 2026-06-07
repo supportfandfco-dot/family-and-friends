@@ -867,16 +867,36 @@ export function GroupChatWindow({ group: initialGroup, onBack, contacts: propCon
     if (cached) { setUnifiedAnswer({ unified: cached, loading: false, contextType: 'group-summary', responses: {} }); return; }
     setUnifiedAnswer({ loading: true, responses: {}, unified: null, contextType: 'group-summary' });
     try {
+      // Enrich senderNames before building transcript
+      const memberMap = {};
+      if (group?.members) {
+        await Promise.all(group.members.map(async (mid) => {
+          if (!memberMap[mid]) {
+            try {
+              const { getUserById } = await import('../../firebase');
+              const p = await getUserById(mid);
+              if (p) memberMap[mid] = p.name || p.displayName || 'Member';
+            } catch {}
+          }
+        }));
+      }
       const msgsWithNames = messages.map(m => ({
         ...m,
-        senderName: m.senderName || (m.senderId === user.uid ? profile?.name : 'Member'),
+        senderName: m.senderName || memberMap[m.senderId] || (m.senderId === user.uid ? profile?.name : 'Member'),
       }));
-      const transcript = msgsWithNames.slice(-15)
-        .map(m => `${m.senderName}: ${m.content?.slice(0, 80) || '[media]'}`)
+      const transcript = msgsWithNames.slice(-20)
+        .filter(m => m.content && m.type !== 'system')
+        .map(m => `${m.senderName}: ${m.content.slice(0, 120)}`)
         .join('\n');
+
+      if (!transcript.trim()) {
+        setUnifiedAnswer({ unified: 'Not enough messages to summarize.', loading: false, contextType: 'group-summary', responses: {} });
+        return;
+      }
+
       await askUnify({
         prompt: `Summarize this group chat "${group?.name || 'Group'}" in 2-3 sentences. Topics, decisions, mood.\n\n${transcript}`,
-        system: 'Brief insightful summary. Flowing prose, max 3 sentences.',
+        system: 'Brief insightful summary. Flowing prose, max 3 sentences. Use real names from the transcript.',
         onModelResult: (r) => {
           setUnifiedAnswer(prev => ({
             ...(prev || { contextType: 'group-summary', responses: {}, unified: null }),
@@ -890,17 +910,13 @@ export function GroupChatWindow({ group: initialGroup, onBack, contacts: propCon
           }));
         },
         onDone: (merged) => {
-          setUnifiedAnswer({
-            contextType: 'group-summary',
-            responses: {},
-            unified: merged,
-            loading: false,
-          });
+          setUnifiedAnswer({ contextType: 'group-summary', responses: {}, unified: merged, loading: false });
           setSummaryCache(cacheKey, merged);
         },
       });
-    } catch {
-      setUnifiedAnswer({ text: null, loading: false, error: 'Could not summarize. Try again.', contextType: 'group-summary' });
+    } catch (e) {
+      console.error('Summarize error:', e);
+      setUnifiedAnswer({ text: null, loading: false, error: 'Could not summarize. Check your GROQ_API_KEY in Cloudflare settings.', contextType: 'group-summary' });
     }
   };
 
@@ -908,14 +924,31 @@ export function GroupChatWindow({ group: initialGroup, onBack, contacts: propCon
     setShowMenu(false);
     setGroupPulse({ loading: true });
     try {
+      // Enrich messages with real sender names — fetch missing profiles
+      const memberMap = {};
+      if (group?.members) {
+        await Promise.all(group.members.map(async (mid) => {
+          if (!memberMap[mid]) {
+            try {
+              const { getUserById } = await import('../../firebase');
+              const p = await getUserById(mid);
+              if (p) memberMap[mid] = p.name || p.displayName || 'Member';
+            } catch {}
+          }
+        }));
+      }
       const msgsWithNames = messages.map(m => ({
         ...m,
-        senderName: m.senderName || (m.senderId === user.uid ? profile?.name : 'Member'),
+        senderName: m.senderName
+          || memberMap[m.senderId]
+          || (m.senderId === user.uid ? profile?.name : null)
+          || 'Member',
       }));
       const pulse = await analyzeGroupPulse(msgsWithNames, group?.name || 'Group');
       setGroupPulse({ ...pulse, loading: false });
-    } catch {
-      setGroupPulse({ loading: false, error: 'Could not analyze group.' });
+    } catch (e) {
+      console.error('Group pulse error:', e);
+      setGroupPulse({ loading: false, error: 'Could not analyze group. Check your API key in Cloudflare settings.' });
     }
   };
 

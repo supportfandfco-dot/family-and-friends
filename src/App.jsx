@@ -194,26 +194,39 @@ function AppInner() {
 
   // ── Outgoing calls ────────────────────────────────────
   const handleVoiceCall = async (partner) => {
+    if (!partner?.id && !partner?.uid) { toast.error('Cannot start call — contact not loaded'); return; }
+    const partnerId = partner.id || partner.uid;
     setActiveRemoteUser(partner);
-    await startCall(partner.id, 'voice');
-    // Push the callee so they get notified even if app is closed
-    sendPushNotification(
-      partner.id,
-      profile?.name || 'Someone',
-      '📞 Incoming voice call — tap to answer',
-      { callType: 'voice', callerId: user.uid, callId: callId || '', tag: `call-${user.uid}` }
-    ).catch(() => {});
+    try {
+      await startCall(partnerId, 'voice');
+      // Use callIdRef pattern — callId state may not be set yet
+      const cid = `${user.uid}_${partnerId}_`;
+      sendPushNotification(
+        partnerId,
+        profile?.name || 'Someone',
+        '📞 Incoming voice call — tap to answer',
+        { callType: 'voice', callerId: user.uid, tag: `call-${user.uid}` }
+      ).catch(() => {});
+    } catch (err) {
+      toast.error(err.message || 'Could not start call');
+    }
   };
 
   const handleVideoCall = async (partner) => {
+    if (!partner?.id && !partner?.uid) { toast.error('Cannot start call — contact not loaded'); return; }
+    const partnerId = partner.id || partner.uid;
     setActiveRemoteUser(partner);
-    await startCall(partner.id, 'video');
-    sendPushNotification(
-      partner.id,
-      profile?.name || 'Someone',
-      '📹 Incoming video call — tap to answer',
-      { callType: 'video', callerId: user.uid, callId: callId || '', tag: `call-${user.uid}` }
-    ).catch(() => {});
+    try {
+      await startCall(partnerId, 'video');
+      sendPushNotification(
+        partnerId,
+        profile?.name || 'Someone',
+        '📹 Incoming video call — tap to answer',
+        { callType: 'video', callerId: user.uid, tag: `call-${user.uid}` }
+      ).catch(() => {});
+    } catch (err) {
+      toast.error(err.message || 'Could not start call');
+    }
   };
 
   // ── Answer call ───────────────────────────────────────
