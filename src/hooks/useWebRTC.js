@@ -1,80 +1,85 @@
 // ═══════════════════════════════════════════════════════
-//  useWebRTC — Voice & Video Calls via Firebase Signaling
-//  Family & Friends  ·  Built by Ishrit Sachdeva
+//  useWebRTC v3 — Production-grade voice & video calls
+//  Fixed: stream reuse, ICE timing, track dedup, cleanup
 // ═══════════════════════════════════════════════════════
-
 import { useRef, useState, useCallback, useEffect } from 'react';
-import { db, doc, setDoc, updateDoc, onSnapshot, collection, addDoc, serverTimestamp } from '../firebase';
+import {
+  db, doc, setDoc, updateDoc, onSnapshot,
+  collection, addDoc, serverTimestamp,
+} from '../firebase';
 
 const ICE_SERVERS = {
   iceServers: [
     { urls: 'stun:stun.l.google.com:19302' },
     { urls: 'stun:stun1.l.google.com:19302' },
-    { urls: 'turn:openrelay.metered.ca:80', username: 'openrelayproject', credential: 'openrelayproject' },
-    { urls: 'turn:openrelay.metered.ca:443', username: 'openrelayproject', credential: 'openrelayproject' },
-    { urls: 'turn:openrelay.metered.ca:443?transport=tcp', username: 'openrelayproject', credential: 'openrelayproject' },
-  ]
+    { urls: 'stun:stun2.l.google.com:19302' },
+    {
+      urls: 'turn:openrelay.metered.ca:80',
+      username: 'openrelayproject',
+      credential: 'openrelayproject',
+    },
+    {
+      urls: 'turn:openrelay.metered.ca:443',
+      username: 'openrelayproject',
+      credential: 'openrelayproject',
+    },
+    {
+      urls: 'turn:openrelay.metered.ca:443?transport=tcp',
+      username: 'openrelayproject',
+      credential: 'openrelayproject',
+    },
+  ],
 };
 
-// ── Helper: stop all tracks in a stream ──────────────
 function stopStream(stream) {
   if (!stream) return;
-  stream.getTracks().forEach(track => {
-    track.stop();
-    track.enabled = false;
-  });
+  stream.getTracks().forEach(t => { try { t.stop(); } catch {} });
 }
 
 export function useWebRTC(currentUserId) {
-  const [callStatus, setCallStatus]     = useState('idle');
-  const [callType, setCallType]         = useState('voice');
+  const [callStatus,   setCallStatus]   = useState('idle');
+  const [callType,     setCallType]     = useState('voice');
   const [remoteUserId, setRemoteUserId] = useState(null);
-  const [callId, setCallId]             = useState(null);
-  const [isMuted, setIsMuted]           = useState(false);
-  const [isVideoOff, setIsVideoOff]     = useState(false);
-  const [isSpeaker, setIsSpeaker]       = useState(false);
+  const [callId,       setCallId]       = useState(null);
+  const [isMuted,      setIsMuted]      = useState(false);
+  const [isVideoOff,   setIsVideoOff]   = useState(false);
+  const [isSpeaker,    setIsSpeaker]    = useState(false);
   const [callDuration, setCallDuration] = useState(0);
 
-  const pcRef           = useRef(null);
-  const localStreamRef  = useRef(null);
-  const localVideoRef   = useRef(null);
-  const remoteVideoRef  = useRef(null);
-  const lastLocalVideoEl  = useRef(null);   // survives component unmount
-  const lastRemoteVideoEl = useRef(null);
-  const callDocUnsub    = useRef(null);
-  const iceCandUnsub    = useRef(null);
-  const timerRef        = useRef(null);
-  const callIdRef       = useRef(null);
+  const pcRef            = useRef(null);
+  const localStreamRef   = useRef(null);
+  const localVideoRef    = useRef(null);
+  const remoteVideoRef   = useRef(null);
+  const callDocUnsub     = useRef(null);
+  const iceCandUnsub     = useRef(null);
+  const timerRef         = useRef(null);
+  const callIdRef        = useRef(null);
+  const pendingCandidates = useRef([]);   // buffer ICE candidates until remote desc set
 
-  // Keep callIdRef in sync
   useEffect(() => { callIdRef.current = callId; }, [callId]);
 
-  // ── Full cleanup ─────────────────────────────────────
+  // ── Cleanup everything ────────────────────────────────
   const cleanup = useCallback(() => {
-    // Stop timer
     clearInterval(timerRef.current);
-    // Unsubscribe listeners
-    if (callDocUnsub.current) { callDocUnsub.current(); callDocUnsub.current = null; }
-    if (iceCandUnsub.current) { iceCandUnsub.current(); iceCandUnsub.current = null; }
-    // Detach srcObject FIRST (turns off camera LED), THEN stop tracks
-    const localEl  = localVideoRef.current  || lastLocalVideoEl.current;
-    const remoteEl = remoteVideoRef.current || lastRemoteVideoEl.current;
-    if (localEl)  { try { localEl.pause();  localEl.srcObject  = null; } catch {} }
-    if (remoteEl) { try { remoteEl.pause(); remoteEl.srcObject = null; } catch {} }
-    lastLocalVideoEl.current  = null;
-    lastRemoteVideoEl.current = null;
+    callDocUnsub.current?.(); callDocUnsub.current = null;
+    iceCandUnsub.current?.(); iceCandUnsub.current = null;
+    pendingCandidates.current = [];
+
+    // Detach video elements before stopping tracks
+    if (localVideoRef.current)  { try { localVideoRef.current.srcObject  = null; } catch {} }
+    if (remoteVideoRef.current) { try { remoteVideoRef.current.srcObject = null; } catch {} }
+
     stopStream(localStreamRef.current);
     localStreamRef.current = null;
-    // Close peer connection
+
     if (pcRef.current) {
-      pcRef.current.ontrack = null;
-      pcRef.current.onicecandidate = null;
+      pcRef.current.ontrack               = null;
+      pcRef.current.onicecandidate        = null;
       pcRef.current.onconnectionstatechange = null;
-      pcRef.current.oniceconnectionstatechange = null;
-      pcRef.current.close();
+      try { pcRef.current.close(); } catch {}
       pcRef.current = null;
     }
-    // Reset state
+
     setCallStatus('idle');
     setCallDuration(0);
     setRemoteUserId(null);
@@ -83,24 +88,20 @@ export function useWebRTC(currentUserId) {
     setIsVideoOff(false);
   }, []);
 
-  // ── Get media stream ─────────────────────────────────
+  // ── Get local media stream ────────────────────────────
   const getLocalStream = useCallback(async (video = false) => {
-    // Always stop existing stream first
     stopStream(localStreamRef.current);
     localStreamRef.current = null;
+    await new Promise(r => setTimeout(r, 300));
 
-    // Small delay to let previous stream fully release
-    await new Promise(r => setTimeout(r, 500));
-
-    // Try multiple constraint combinations - fallback to audio-only if camera busy
     const attempts = video
       ? [
-          { audio: { echoCancellation: true, noiseSuppression: true }, video: { facingMode: 'user' } },
+          { audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true }, video: { facingMode: 'user', width: { ideal: 640 }, height: { ideal: 480 } } },
           { audio: { echoCancellation: true, noiseSuppression: true }, video: true },
-          { audio: { echoCancellation: true, noiseSuppression: true }, video: false },
+          { audio: true, video: false },
         ]
       : [
-          { audio: { echoCancellation: true, noiseSuppression: true }, video: false },
+          { audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true }, video: false },
           { audio: true, video: false },
         ];
 
@@ -109,60 +110,67 @@ export function useWebRTC(currentUserId) {
       try {
         const stream = await navigator.mediaDevices.getUserMedia(constraints);
         localStreamRef.current = stream;
+        // Ensure audio enabled immediately
+        stream.getAudioTracks().forEach(t => { t.enabled = true; });
+        // Attach to local video element
         if (localVideoRef.current) {
-          lastLocalVideoEl.current = localVideoRef.current;
           localVideoRef.current.srcObject = stream;
           localVideoRef.current.muted = true;
+          localVideoRef.current.play().catch(() => {});
         }
-        console.log('Got stream with video:', !!constraints.video);
-        // Ensure audio tracks start enabled (some Android devices start muted)
-        stream.getAudioTracks().forEach(t => { t.enabled = true; });
         return stream;
       } catch (err) {
-        console.warn('Stream attempt failed:', err.name);
         lastErr = err;
-        await new Promise(r => setTimeout(r, 300));
+        await new Promise(r => setTimeout(r, 200));
       }
     }
 
-    if (lastErr?.name === 'NotAllowedError') {
-      throw new Error('Camera/microphone access denied. Please allow permissions.');
+    if (lastErr?.name === 'NotAllowedError' || lastErr?.name === 'PermissionDeniedError') {
+      throw new Error('Microphone/camera permission denied. Please tap Allow when prompted.');
     }
-    throw new Error('Could not access camera/microphone. Try closing other apps using the camera.');
+    throw new Error('Could not access microphone. Close other apps using the mic and try again.');
   }, []);
 
-  // ── Create peer connection ───────────────────────────
+  // ── Flush buffered ICE candidates ─────────────────────
+  const flushCandidates = useCallback(async (pc) => {
+    if (!pc || !pc.remoteDescription) return;
+    for (const c of pendingCandidates.current) {
+      try { await pc.addIceCandidate(new RTCIceCandidate(c)); } catch {}
+    }
+    pendingCandidates.current = [];
+  }, []);
+
+  // ── Create peer connection ────────────────────────────
   const createPC = useCallback((cid, isOffer) => {
     if (pcRef.current) {
-      pcRef.current.close();
+      try { pcRef.current.close(); } catch {}
       pcRef.current = null;
     }
+
     const pc = new RTCPeerConnection(ICE_SERVERS);
     pcRef.current = pc;
 
-    // Add local tracks — add all currently available tracks
+    // Add local tracks (dedup by track id)
     if (localStreamRef.current) {
-      const existingSenders = pc.getSenders();
+      const senders = pc.getSenders();
       localStreamRef.current.getTracks().forEach(track => {
-        // Avoid adding duplicate tracks
-        const alreadyAdded = existingSenders.some(s => s.track?.id === track.id);
-        if (!alreadyAdded) pc.addTrack(track, localStreamRef.current);
+        const already = senders.some(s => s.track?.id === track.id);
+        if (!already) pc.addTrack(track, localStreamRef.current);
       });
     }
 
     // Receive remote tracks
     pc.ontrack = (event) => {
-      console.log('Remote track received:', event.track.kind);
-      if (remoteVideoRef.current && event.streams[0]) {
-        lastRemoteVideoEl.current = remoteVideoRef.current;
-        remoteVideoRef.current.srcObject = event.streams[0];
-        remoteVideoRef.current.volume = 1.0;
-        remoteVideoRef.current.muted = false;
+      const remoteStream = event.streams[0];
+      if (remoteVideoRef.current && remoteStream) {
+        remoteVideoRef.current.srcObject = remoteStream;
+        remoteVideoRef.current.muted     = false;
+        remoteVideoRef.current.volume    = 1.0;
         remoteVideoRef.current.play().catch(() => {});
       }
     };
 
-    // Send ICE candidates
+    // ICE candidates → Firestore
     pc.onicecandidate = async (event) => {
       if (!event.candidate) return;
       const col = isOffer ? 'callerCandidates' : 'calleeCandidates';
@@ -171,68 +179,86 @@ export function useWebRTC(currentUserId) {
       } catch {}
     };
 
-    // Connection state
+    // Connection state changes
     pc.onconnectionstatechange = () => {
-      console.log('Connection state:', pc.connectionState);
-      if (pc.connectionState === 'connected') {
+      const state = pc.connectionState;
+      if (state === 'connected') {
         setCallStatus('connected');
+        clearInterval(timerRef.current);
         timerRef.current = setInterval(() => setCallDuration(d => d + 1), 1000);
       }
-      if (['disconnected', 'failed', 'closed'].includes(pc.connectionState)) {
+      if (['disconnected', 'failed', 'closed'].includes(state)) {
         const cid = callIdRef.current;
-        if (cid) {
-          updateDoc(doc(db, 'calls', cid), { status: 'ended' }).catch(() => {});
-        }
+        if (cid) updateDoc(doc(db, 'calls', cid), { status: 'ended' }).catch(() => {});
         cleanup();
       }
     };
 
     return pc;
-  }, [cleanup]);
+  }, [cleanup, flushCandidates]);
 
-  // ── Start outgoing call ──────────────────────────────
+  // ── Start outgoing call ───────────────────────────────
   const startCall = useCallback(async (targetUserId, type = 'voice') => {
+    if (!targetUserId) throw new Error('No target user specified');
+    if (!currentUserId) throw new Error('You must be logged in to call');
+
     setCallType(type);
     setRemoteUserId(targetUserId);
     setCallStatus('ringing');
 
     try {
       await getLocalStream(type === 'video');
+
       const cid = `${currentUserId}_${targetUserId}_${Date.now()}`;
       setCallId(cid);
+      callIdRef.current = cid;
 
       const pc = createPC(cid, true);
+
       const offer = await pc.createOffer({
         offerToReceiveAudio: true,
-        offerToReceiveVideo: type === 'video'
+        offerToReceiveVideo: type === 'video',
       });
       await pc.setLocalDescription(offer);
 
+      // Write call doc
       await setDoc(doc(db, 'calls', cid), {
-        callerId: currentUserId,
-        calleeId: targetUserId,
+        callerId:  currentUserId,
+        calleeId:  targetUserId,
         type,
-        status: 'ringing',
-        offer: { type: offer.type, sdp: offer.sdp },
-        answer: null,
-        createdAt: serverTimestamp()
+        status:    'ringing',
+        offer:     { type: offer.type, sdp: offer.sdp },
+        answer:    null,
+        createdAt: serverTimestamp(),
       });
 
-      // Listen for answer
+      // Watch for answer + status changes
       callDocUnsub.current = onSnapshot(doc(db, 'calls', cid), async (snap) => {
+        if (!snap.exists()) return;
         const data = snap.data();
-        if (!data) return;
+
+        // Apply answer
         if (data.answer && pc.signalingState === 'have-local-offer') {
-          await pc.setRemoteDescription(new RTCSessionDescription(data.answer)).catch(() => {});
+          try {
+            await pc.setRemoteDescription(new RTCSessionDescription(data.answer));
+            await flushCandidates(pc);
+          } catch {}
         }
-        if (data.status === 'declined' || data.status === 'ended') cleanup();
+
+        if (data.status === 'declined' || data.status === 'ended') {
+          cleanup();
+        }
       });
 
-      // Listen for callee ICE candidates
+      // Buffer callee ICE candidates
       iceCandUnsub.current = onSnapshot(collection(db, 'calls', cid, 'calleeCandidates'), (snap) => {
         snap.docChanges().forEach(async (change) => {
-          if (change.type === 'added' && pc.remoteDescription) {
-            try { await pc.addIceCandidate(new RTCIceCandidate(change.doc.data())); } catch {}
+          if (change.type !== 'added') return;
+          const candidate = change.doc.data();
+          if (pc.remoteDescription) {
+            try { await pc.addIceCandidate(new RTCIceCandidate(candidate)); } catch {}
+          } else {
+            pendingCandidates.current.push(candidate);
           }
         });
       });
@@ -241,50 +267,61 @@ export function useWebRTC(currentUserId) {
       cleanup();
       throw err;
     }
-  }, [currentUserId, getLocalStream, createPC, cleanup]);
+  }, [currentUserId, getLocalStream, createPC, cleanup, flushCandidates]);
 
-  // ── Answer incoming call ─────────────────────────────
+  // ── Answer incoming call ──────────────────────────────
   const answerCall = useCallback(async (cid, callData) => {
-    setCallType(callData.type);
+    if (!cid || !callData) throw new Error('Invalid call data');
+
+    setCallType(callData.type || 'voice');
     setRemoteUserId(callData.callerId);
     setCallStatus('ringing');
     setCallId(cid);
+    callIdRef.current = cid;
 
     try {
       await getLocalStream(callData.type === 'video');
+
       const pc = createPC(cid, false);
 
       await pc.setRemoteDescription(new RTCSessionDescription(callData.offer));
+      await flushCandidates(pc);
+
       const answer = await pc.createAnswer();
       await pc.setLocalDescription(answer);
 
       await updateDoc(doc(db, 'calls', cid), {
         answer: { type: answer.type, sdp: answer.sdp },
-        status: 'active'
+        status: 'active',
       });
 
-      // Listen for caller ICE candidates
+      // Buffer caller ICE candidates
       iceCandUnsub.current = onSnapshot(collection(db, 'calls', cid, 'callerCandidates'), (snap) => {
         snap.docChanges().forEach(async (change) => {
-          if (change.type === 'added') {
-            try { await pc.addIceCandidate(new RTCIceCandidate(change.doc.data())); } catch {}
+          if (change.type !== 'added') return;
+          const candidate = change.doc.data();
+          if (pc.remoteDescription) {
+            try { await pc.addIceCandidate(new RTCIceCandidate(candidate)); } catch {}
+          } else {
+            pendingCandidates.current.push(candidate);
           }
         });
       });
 
-      // Listen for call end
+      // Watch for call end
       callDocUnsub.current = onSnapshot(doc(db, 'calls', cid), (snap) => {
+        if (!snap.exists()) return;
         const data = snap.data();
-        if (data?.status === 'ended' || data?.status === 'declined') cleanup();
+        if (data.status === 'ended' || data.status === 'declined') cleanup();
       });
 
     } catch (err) {
       cleanup();
       throw err;
     }
-  }, [getLocalStream, createPC, cleanup]);
+  }, [getLocalStream, createPC, cleanup, flushCandidates]);
 
-  // ── Decline call ─────────────────────────────────────
+  // ── Decline ───────────────────────────────────────────
   const declineCall = useCallback(async (cid) => {
     if (cid) {
       try { await updateDoc(doc(db, 'calls', cid), { status: 'declined' }); } catch {}
@@ -301,86 +338,73 @@ export function useWebRTC(currentUserId) {
     cleanup();
   }, [cleanup]);
 
-  // ── Toggle mute ──────────────────────────────────────
+  // ── Toggle mute ───────────────────────────────────────
   const toggleMute = useCallback(() => {
     const tracks = localStreamRef.current?.getAudioTracks() || [];
-    if (tracks.length === 0) {
-      console.warn('toggleMute: no audio tracks found');
-      return;
-    }
+    if (!tracks.length) return;
     const newMuted = !isMuted;
     tracks.forEach(t => { t.enabled = !newMuted; });
     setIsMuted(newMuted);
   }, [isMuted]);
 
-  // ── Toggle camera ────────────────────────────────────
+  // ── Toggle camera ─────────────────────────────────────
   const toggleCamera = useCallback(() => {
-    if (localStreamRef.current) {
-      localStreamRef.current.getVideoTracks().forEach(t => { t.enabled = !t.enabled; });
-      setIsVideoOff(v => !v);
-    }
-  }, []);
+    const tracks = localStreamRef.current?.getVideoTracks() || [];
+    if (!tracks.length) return;
+    const newOff = !isVideoOff;
+    tracks.forEach(t => { t.enabled = !newOff; });
+    setIsVideoOff(newOff);
+  }, [isVideoOff]);
 
-  // ── Switch camera (front ↔ back) ─────────────────────
+  // ── Switch camera (front ↔ back) ──────────────────────
   const facingModeRef = useRef('user');
   const switchCamera = useCallback(async () => {
     if (!localStreamRef.current) return;
     const next = facingModeRef.current === 'user' ? 'environment' : 'user';
     facingModeRef.current = next;
     try {
-      localStreamRef.current.getVideoTracks().forEach(t => t.stop());
       const newStream = await navigator.mediaDevices.getUserMedia({
-        audio: false, video: { facingMode: next }
+        audio: false,
+        video: { facingMode: next },
       });
-      const newVideoTrack = newStream.getVideoTracks()[0];
-      // Replace track in the peer connection
+      const newTrack = newStream.getVideoTracks()[0];
+      if (!newTrack) return;
+      // Replace track in peer connection
       if (pcRef.current) {
         const sender = pcRef.current.getSenders().find(s => s.track?.kind === 'video');
-        if (sender) sender.replaceTrack(newVideoTrack).catch(() => {});
+        if (sender) await sender.replaceTrack(newTrack);
       }
-      // Swap track in local stream
-      localStreamRef.current.getVideoTracks().forEach(t => localStreamRef.current.removeTrack(t));
-      localStreamRef.current.addTrack(newVideoTrack);
+      // Swap in local stream
+      localStreamRef.current.getVideoTracks().forEach(t => {
+        localStreamRef.current.removeTrack(t);
+        t.stop();
+      });
+      localStreamRef.current.addTrack(newTrack);
       if (localVideoRef.current) localVideoRef.current.srcObject = localStreamRef.current;
-    } catch (e) { console.warn('Switch camera failed:', e); }
+    } catch (e) {
+      console.warn('[WebRTC] Switch camera failed:', e.message);
+    }
   }, []);
 
-  // ── Toggle speaker (loudspeaker vs earpiece) ─────────
-  // On Android WebView setSinkId is unsupported — we force audio via AudioContext
+  // ── Speaker toggle ────────────────────────────────────
   const toggleSpeaker = useCallback(() => {
     setIsSpeaker(prev => {
       const next = !prev;
-      // Web audio element routing (works on desktop Chrome/Edge)
       const el = remoteVideoRef.current;
       if (el && typeof el.setSinkId === 'function') {
         el.setSinkId(next ? 'default' : '').catch(() => {});
       }
-      // Android WebView: set audio output mode via AudioContext
-      try {
-        if (next) {
-          // Force loudspeaker by playing silent audio through an AudioContext
-          // which switches Android audio focus to STREAM_MUSIC (speaker)
-          const ctx = new (window.AudioContext || window.webkitAudioContext)();
-          const buf = ctx.createBuffer(1, 1, 22050);
-          const src = ctx.createBufferSource();
-          src.buffer = buf;
-          src.connect(ctx.destination);
-          src.start(0);
-          ctx.resume();
-        }
-      } catch {}
       return next;
     });
   }, []);
 
-  // ── Format duration ──────────────────────────────────
+  // ── Duration formatter ────────────────────────────────
   const formatDuration = (s) => {
     const m = Math.floor(s / 60).toString().padStart(2, '0');
     const sec = (s % 60).toString().padStart(2, '0');
     return `${m}:${sec}`;
   };
 
-  // Cleanup on unmount
   useEffect(() => () => cleanup(), []);
 
   return {

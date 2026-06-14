@@ -29,6 +29,24 @@ service cloud.firestore {
     // ── Calls ─────────────────────────────────────────────
     match /calls/{callId} {
       allow read, write: if request.auth != null;
+      // ICE candidate subcollections — CRITICAL for WebRTC
+      match /callerCandidates/{docId} {
+        allow read, write: if request.auth != null;
+      }
+      match /calleeCandidates/{docId} {
+        allow read, write: if request.auth != null;
+      }
+    }
+
+    // ── Meeting Rooms ─────────────────────────────────────
+    match /meetings/{meetingId} {
+      allow read, write: if request.auth != null;
+      match /waiting/{docId} {
+        allow read, write: if request.auth != null;
+      }
+      match /admitted/{docId} {
+        allow read, write: if request.auth != null;
+      }
     }
 
     // ── Group Calls ───────────────────────────────────────

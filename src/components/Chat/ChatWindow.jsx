@@ -1064,13 +1064,13 @@ export default function ChatWindow({ chatPartner, onBack, onVoiceCall, onVideoCa
         prompt: `Summarize this conversation with "${chatPartner?.name || 'contact'}" in 2-3 sentences. Topics, decisions, mood.\n\n${transcript}`,
         system: 'Brief insightful summary. Flowing prose, max 3 sentences.',
         onModelResult: (r) => {
-          setUnifiedAnswer(prev => prev ? { ...prev, responses: { ...prev.responses, [r.id]: r } } : prev);
+          setUnifiedAnswer(prev => ({ ...(prev || { contextType: 'summary', responses: {}, unified: null, loading: true }), responses: { ...(prev?.responses || {}), [r.id]: r } }));
         },
         onUnifiedStart: () => {
-          setUnifiedAnswer(prev => prev ? { ...prev, loading: true } : prev);
+          setUnifiedAnswer(prev => ({ ...(prev || { contextType: 'summary', responses: {}, unified: null }), loading: true }));
         },
         onDone: (merged) => {
-          setUnifiedAnswer(prev => prev ? { ...prev, loading: false, unified: merged } : prev);
+          setUnifiedAnswer({ contextType: 'summary', responses: {}, loading: false, unified: merged });
           setSummaryCache(chatId, merged);
         },
       });

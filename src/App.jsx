@@ -192,15 +192,36 @@ function AppInner() {
     setShowSettings(false);
   }, []);
 
+  // ── Check mic/camera permission before calling ────────
+  const checkMediaPermission = async (needVideo) => {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        audio: true,
+        video: needVideo,
+      });
+      // Stop the test stream immediately — we just needed the permission grant
+      stream.getTracks().forEach(t => t.stop());
+      return true;
+    } catch (err) {
+      if (err.name === 'NotAllowedError' || err.name === 'PermissionDeniedError') {
+        toast.error('Please allow microphone access in your browser settings, then try again.', { duration: 5000 });
+      } else {
+        toast.error('Could not access microphone: ' + err.message);
+      }
+      return false;
+    }
+  };
+
   // ── Outgoing calls ────────────────────────────────────
   const handleVoiceCall = async (partner) => {
-    if (!partner?.id && !partner?.uid) { toast.error('Cannot start call — contact not loaded'); return; }
+    if (!partner?.id && !partner?.uid) { toast.error('Contact not loaded yet, please wait.'); return; }
     const partnerId = partner.id || partner.uid;
+    // Check permission first — give browser a chance to show the permission prompt
+    const allowed = await checkMediaPermission(false);
+    if (!allowed) return;
     setActiveRemoteUser(partner);
     try {
       await startCall(partnerId, 'voice');
-      // Use callIdRef pattern — callId state may not be set yet
-      const cid = `${user.uid}_${partnerId}_`;
       sendPushNotification(
         partnerId,
         profile?.name || 'Someone',
@@ -208,13 +229,16 @@ function AppInner() {
         { callType: 'voice', callerId: user.uid, tag: `call-${user.uid}` }
       ).catch(() => {});
     } catch (err) {
-      toast.error(err.message || 'Could not start call');
+      setActiveRemoteUser(null);
+      toast.error(err.message || 'Could not start call. Check microphone permissions.');
     }
   };
 
   const handleVideoCall = async (partner) => {
-    if (!partner?.id && !partner?.uid) { toast.error('Cannot start call — contact not loaded'); return; }
+    if (!partner?.id && !partner?.uid) { toast.error('Contact not loaded yet, please wait.'); return; }
     const partnerId = partner.id || partner.uid;
+    const allowed = await checkMediaPermission(true);
+    if (!allowed) return;
     setActiveRemoteUser(partner);
     try {
       await startCall(partnerId, 'video');
@@ -225,7 +249,8 @@ function AppInner() {
         { callType: 'video', callerId: user.uid, tag: `call-${user.uid}` }
       ).catch(() => {});
     } catch (err) {
-      toast.error(err.message || 'Could not start call');
+      setActiveRemoteUser(null);
+      toast.error(err.message || 'Could not start call. Check camera permissions.');
     }
   };
 
