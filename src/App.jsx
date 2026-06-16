@@ -29,6 +29,7 @@ import { GroupChatWindow } from './components/Groups/GroupChat';
 import Settings from './components/Settings/Settings';
 import CallScreen from './components/Calls/CallScreen';
 import GroupCallScreen from './components/Calls/GroupCallScreen';
+import MeetingRoom from './components/Calls/MeetingRoom';
 
 function AppInner() {
   const { user, profile, loading, isAuthenticated } = useAuth();
@@ -212,11 +213,13 @@ function AppInner() {
     }
   };
 
+  // ── Meeting room state ────────────────────────────────
+  const [activeMeeting, setActiveMeeting] = useState(null); // { code, isHost }
+
   // ── Outgoing calls ────────────────────────────────────
   const handleVoiceCall = async (partner) => {
     if (!partner?.id && !partner?.uid) { toast.error('Contact not loaded yet, please wait.'); return; }
     const partnerId = partner.id || partner.uid;
-    // Check permission first — give browser a chance to show the permission prompt
     const allowed = await checkMediaPermission(false);
     if (!allowed) return;
     setActiveRemoteUser(partner);
@@ -235,6 +238,11 @@ function AppInner() {
   };
 
   const handleVideoCall = async (partner) => {
+    // ── Intercept meeting room calls — never route through WebRTC ──
+    if (partner?.isMeeting && partner?.meetingCode) {
+      setActiveMeeting({ code: partner.meetingCode, isHost: !!partner.isHost });
+      return;
+    }
     if (!partner?.id && !partner?.uid) { toast.error('Contact not loaded yet, please wait.'); return; }
     const partnerId = partner.id || partner.uid;
     const allowed = await checkMediaPermission(true);
@@ -405,6 +413,21 @@ function AppInner() {
 
   return (
     <>
+      {/* ── Meeting Room overlay ── */}
+      {activeMeeting && (
+        <MeetingRoom
+          meetingCode={activeMeeting.code}
+          isHost={activeMeeting.isHost}
+          onStartCall={() => {
+            // After host starts or participant is admitted — close meeting room
+            // (in full impl this would open the video call)
+            setActiveMeeting(null);
+            toast.success('Starting video feed…');
+          }}
+          onClose={() => setActiveMeeting(null)}
+        />
+      )}
+
       {/* ── 1-on-1 call overlay ── */}
       {(callStatus !== 'idle' || incomingCall) && (
         <CallScreen

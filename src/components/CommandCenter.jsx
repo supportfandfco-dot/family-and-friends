@@ -133,11 +133,25 @@ export default function CommandCenter({ chats, groups, user, onSelectChat, onSel
   useEffect(() => {
     if (!uid) return;
     const ref = doc(db, 'users', uid, 'commandCenter', 'data');
-    const unsub = onSnapshot(ref, snap => {
-      setCcData(snap.exists() ? snap.data() : {});
-      setCcLoading(false);
-    });
-    return unsub;
+
+    // Safety timeout — if Firestore doesn't respond in 8s, unblock UI
+    const timeout = setTimeout(() => setCcLoading(false), 8000);
+
+    const unsub = onSnapshot(ref,
+      snap => {
+        clearTimeout(timeout);
+        setCcData(snap.exists() ? snap.data() : {});
+        setCcLoading(false);
+      },
+      (err) => {
+        // Permission error or network error — unblock UI with empty data
+        clearTimeout(timeout);
+        console.warn('[CommandCenter] Firestore error:', err.code, err.message);
+        setCcData({});
+        setCcLoading(false);
+      }
+    );
+    return () => { clearTimeout(timeout); unsub(); };
   }, [uid]);
 
   // ── fetch user's lastSeen once ────────────────────────────────
@@ -200,7 +214,10 @@ export default function CommandCenter({ chats, groups, user, onSelectChat, onSel
       <div className="p-8 flex flex-col items-center justify-center animate-fade-in text-center mt-10">
         <Zap className="animate-pulse text-brand-500 mb-4" size={32} />
         <h3 className="font-semibold text-[var(--text-primary)]">Loading Command Center</h3>
-        <p className="text-sm text-[var(--text-secondary)] mt-2">Reading your messages…</p>
+        <p className="text-sm text-[var(--text-secondary)] mt-2">Connecting to Firestore…</p>
+        <p className="text-xs text-[var(--text-secondary)] mt-1 opacity-60">
+          If this takes too long, check your Firestore rules are published.
+        </p>
       </div>
     );
   }

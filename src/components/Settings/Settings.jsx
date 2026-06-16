@@ -5,13 +5,13 @@
 
 import { useState, useRef, useEffect } from 'react';
 import { useAuth } from '../../contexts/AuthContext';
-import { useTheme } from '../../contexts/ThemeContext';
-import { uploadFile } from '../../firebase';
+import { useTheme } from '../../contexts/ThemeContext';\nimport { uploadFile } from '../../firebase';
 import {
   User, Bell, Lock, Palette, Moon, Sun, Monitor, HelpCircle,
   LogOut, ChevronRight, Edit3, Camera, Check, ArrowLeft,
   MessageSquare, Shield, Globe, Smartphone, Star, Heart,
-  Code, Info, Volume2, Eye, Download, Trash2, Share2, X, UserMinus, Bot
+  Code, Info, Volume2, Eye, Download, Trash2, Share2, X, UserMinus, Bot,
+  MessageCircle, Wifi,
 } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { db, doc, onSnapshot, unblockUser, getDoc, uploadMedia } from '../../firebase';
@@ -97,7 +97,17 @@ export default function Settings({ onBack, initialSection }) {
   const { profile, updateProfile, logout } = useAuth();
   const { theme, setTheme, isDark, wallpaper, setWallpaper, wallpapers, fontSize, setFontSize } = useTheme();
 
-  const [section, setSection] = useState(initialSection || 'main'); // main|profile|notifications|privacy|appearance|about
+  const [section, setSection] = useState(initialSection || 'main');
+
+  // Chat settings (persisted in localStorage)
+  const [chatSettings, setChatSettings] = useState(() => {
+    try { return JSON.parse(localStorage.getItem('ff_chat_settings')) || {}; } catch { return {}; }
+  });
+  const saveChatSettings = (updates) => {
+    const next = { ...chatSettings, ...updates };
+    setChatSettings(next);
+    localStorage.setItem('ff_chat_settings', JSON.stringify(next));
+  }; // main|profile|notifications|privacy|appearance|about
 
   // Support external navigation via global window flag
   useEffect(() => {
@@ -207,6 +217,8 @@ export default function Settings({ onBack, initialSection }) {
       {[
         { icon: Bell, label: 'Notifications', sub: 'Message & call alerts', section: 'notifications', color: '#f97316' },
         { icon: Palette, label: 'Appearance', sub: 'Theme, wallpaper & fonts', section: 'appearance', color: '#8b5cf6' },
+        { icon: MessageCircle, label: 'Chat Settings', sub: 'Bubble shape, text size, sound', section: 'chat_settings', color: '#22c55e' },
+        { icon: Smartphone, label: 'App Preferences', sub: 'Auto-download, auto-lock, sound', section: 'app_preferences', color: '#3b82f6' },
         { icon: Lock, label: 'Privacy', sub: 'Last seen, read receipts', section: 'privacy', color: '#0ea5e9' },
         { icon: MessageSquare, label: 'Chats', sub: 'Backup, history, transfer', section: 'chats', color: '#22c55e' },
         { icon: HelpCircle, label: 'Help', sub: 'FAQ, contact us', section: 'help', color: '#6b7280' },
@@ -352,88 +364,253 @@ export default function Settings({ onBack, initialSection }) {
     </div>
   );
 
-  const renderAppearance = () => (
-    <div className="p-4 space-y-6 animate-fade-in">
-      {/* Theme */}
-      <div>
-        <h3 className="text-sm font-semibold text-[var(--text-secondary)] uppercase tracking-wide mb-3">Theme</h3>
-        <div className="grid grid-cols-3 gap-3">
-          {[
-            { id: 'light', icon: Sun, label: 'Light' },
-            { id: 'dark', icon: Moon, label: 'Dark' },
-            { id: 'system', icon: Monitor, label: 'System' },
-          ].map(t => (
-            <button
-              key={t.id}
-              onClick={() => setTheme(t.id)}
-              className={`flex flex-col items-center gap-2 p-4 rounded-2xl border-2 transition-all ${
-                theme === t.id
-                  ? 'border-brand-500 bg-[var(--hover)]'
-                  : 'border-[var(--border)] hover:border-brand-300'
-              }`}
-            >
-              <t.icon size={22} className={theme === t.id ? 'text-brand-500' : 'text-[var(--text-secondary)]'} />
-              <span className={`text-sm font-medium ${theme === t.id ? 'text-[var(--text-primary)]' : 'text-[var(--text-secondary)]'}`}>
-                {t.label}
-              </span>
-            </button>
-          ))}
-        </div>
-      </div>
+  const renderAppearance = () => {
+    // Live preview bubble styles
+    const bubbleShapes = [
+      { id: 'classic', label: 'Classic WA', sub: 'Rounded edges', radius: '18px 18px 4px 18px' },
+      { id: 'pill',    label: 'Sleek Pill', sub: 'Flowing capsule', radius: '999px' },
+      { id: 'ios',     label: 'iOS Smooth', sub: 'Thick rounded margins', radius: '22px' },
+      { id: 'brutalist', label: 'Brutalist', sub: 'Sharp borders', radius: '4px' },
+    ];
+    const fontSizes = [
+      { id: 'small',  label: 'SMALL',    px: 12 },
+      { id: 'medium', label: 'MEDIUM',   px: 15 },
+      { id: 'large',  label: 'LARGE',    px: 17 },
+      { id: 'xl',     label: 'XL EXTRA', px: 20 },
+    ];
+    const [bubbleShape, setBubbleShape] = [
+      chatSettings?.bubbleShape || 'classic',
+      (v) => saveChatSettings({ bubbleShape: v }),
+    ];
+    const currentRadius = bubbleShapes.find(b => b.id === bubbleShape)?.radius || '18px 18px 4px 18px';
+    const currentFontPx = fontSizes.find(f => f.id === fontSize)?.px || 15;
 
-      {/* Wallpaper */}
-      <div>
-        <h3 className="text-sm font-semibold text-[var(--text-secondary)] uppercase tracking-wide mb-3">Chat Wallpaper</h3>
-        <div className="grid grid-cols-3 gap-3">
-          {Object.entries(wallpapers).map(([id, w]) => (
-            <button
-              key={id}
-              onClick={() => setWallpaper(id)}
-              style={{ background: w.preview || w.bg }}
-              className={`h-20 rounded-2xl border-2 transition-all overflow-hidden relative shadow-sm ${ 
-                wallpaper === id ? 'border-brand-500 scale-95 shadow-brand-500/30 shadow-md' : 'border-[var(--border)] hover:border-brand-300 hover:scale-[0.97]'
-              }`}
-            >
-              {wallpaper === id && (
-                <div className="absolute inset-0 flex items-center justify-center">
-                  <div className="w-7 h-7 rounded-full bg-white/90 flex items-center justify-center shadow-lg">
-                    <Check size={14} className="text-brand-600" />
-                  </div>
+    return (
+      <div className="p-4 space-y-6 animate-fade-in">
+
+        {/* SYSTEM APPEARANCE */}
+        <section>
+          <p className="text-xs font-bold text-[var(--text-secondary)] uppercase tracking-widest mb-3">System Appearance</p>
+          <div className="space-y-2">
+            {[
+              { id: 'system', icon: Monitor, label: 'System Default', sub: 'Automatically matches your device appearance' },
+              { id: 'light',  icon: Sun,     label: 'Light Theme',    sub: 'Bright and clean workspace' },
+              { id: 'dark',   icon: Moon,    label: 'Dark Theme',     sub: 'Deep black for saving battery power' },
+            ].map(t => (
+              <button key={t.id} onClick={() => setTheme(t.id)}
+                className={`w-full flex items-center gap-3 p-3.5 rounded-2xl border transition-all text-left ${
+                  theme === t.id
+                    ? 'border-brand-500 bg-brand-500/5'
+                    : 'border-[var(--border)] bg-[var(--sidebar-bg)] hover:border-brand-300'
+                }`}>
+                <div className={`w-9 h-9 rounded-full flex items-center justify-center flex-shrink-0 ${
+                  theme === t.id ? 'bg-brand-500/10' : 'bg-[var(--hover)]'
+                }`}>
+                  <t.icon size={18} className={theme === t.id ? 'text-brand-500' : 'text-[var(--text-secondary)]'} />
                 </div>
-              )}
-              <span className="absolute bottom-1.5 left-0 right-0 text-center text-[10px] font-bold"
-                style={{ color: 'white', textShadow: '0 1px 4px rgba(0,0,0,0.6)' }}>
-                {w.label}
-              </span>
-            </button>
-          ))}
-        </div>
-      </div>
+                <div className="flex-1">
+                  <p className={`text-sm font-semibold ${theme === t.id ? 'text-brand-500' : 'text-[var(--text-primary)]'}`}>{t.label}</p>
+                  <p className="text-xs text-[var(--text-secondary)]">{t.sub}</p>
+                </div>
+                {theme === t.id && (
+                  <div className="w-6 h-6 rounded-full bg-brand-500 flex items-center justify-center">
+                    <Check size={13} className="text-white" />
+                  </div>
+                )}
+              </button>
+            ))}
+          </div>
+        </section>
 
-      {/* Font size */}
-      <div>
-        <h3 className="text-sm font-semibold text-[var(--text-secondary)] uppercase tracking-wide mb-3">Font Size</h3>
-        <div className="flex gap-3">
-          {['small', 'medium', 'large'].map(size => (
-            <button
-              key={size}
-              onClick={() => setFontSize(size)}
-              className={`flex-1 py-3 rounded-2xl border-2 text-sm font-medium capitalize transition-all ${
-                fontSize === size
-                  ? 'border-brand-500 bg-[var(--hover)] text-[var(--text-primary)]'
-                  : 'border-[var(--border)] text-[var(--text-secondary)] hover:border-brand-300'
-              }`}
-              style={{ fontSize: size === 'small' ? '12px' : size === 'large' ? '16px' : '14px' }}
-            >
-              {size === 'small' ? 'Aa' : size === 'large' ? 'Aa' : 'Aa'}
-              <br />
-              <span className="text-xs">{size}</span>
-            </button>
-          ))}
-        </div>
+        {/* BUBBLE SHAPE & SIZING */}
+        <section>
+          <p className="text-xs font-bold text-[var(--text-secondary)] uppercase tracking-widest mb-3 flex items-center gap-2">
+            <MessageCircle size={13} /> Bubble Shape &amp; Sizing
+          </p>
+          <div className="grid grid-cols-2 gap-2">
+            {bubbleShapes.map(b => (
+              <button key={b.id} onClick={() => saveChatSettings({ bubbleShape: b.id })}
+                className={`p-3 rounded-xl border-2 text-left transition-all relative ${
+                  bubbleShape === b.id
+                    ? 'border-brand-500 bg-brand-500/5'
+                    : 'border-[var(--border)] bg-[var(--sidebar-bg)]'
+                }`}>
+                {bubbleShape === b.id && (
+                  <div className="absolute top-2 right-2 w-5 h-5 rounded-full bg-brand-500 flex items-center justify-center">
+                    <Check size={11} className="text-white" />
+                  </div>
+                )}
+                <p className={`text-sm font-bold ${bubbleShape === b.id ? 'text-brand-500' : 'text-[var(--text-primary)]'}`}>{b.label}</p>
+                <p className="text-[11px] text-[var(--text-secondary)]">{b.sub}</p>
+              </button>
+            ))}
+          </div>
+        </section>
+
+        {/* MESSAGE TEXT SIZE */}
+        <section>
+          <p className="text-xs font-bold text-[var(--text-secondary)] uppercase tracking-widest mb-3 flex items-center gap-2">
+            <span className="font-mono text-sm">T</span> Message Text Size
+          </p>
+          <div className="flex gap-1 bg-[var(--hover)] p-1 rounded-xl">
+            {fontSizes.map(f => (
+              <button key={f.id} onClick={() => setFontSize(f.id)}
+                className={`flex-1 py-2 rounded-lg text-[11px] font-bold transition-all ${
+                  fontSize === f.id
+                    ? 'bg-brand-500 text-white shadow-sm'
+                    : 'text-[var(--text-secondary)]'
+                }`}>
+                {f.label}
+              </button>
+            ))}
+          </div>
+        </section>
+
+        {/* LIVE PREVIEW */}
+        <section>
+          <p className="text-xs font-bold text-[var(--text-secondary)] uppercase tracking-widest mb-3">Live Appearance Preview</p>
+          <div className="bg-[var(--chat-bg)] rounded-2xl p-4 space-y-3 border border-[var(--border)]">
+            {/* Incoming bubble */}
+            <div className="flex justify-start">
+              <div className="max-w-[75%] bg-[var(--sidebar-bg)] border border-[var(--border)] px-3 py-2 shadow-sm"
+                style={{ borderRadius: currentRadius, fontSize: currentFontPx }}>
+                <p className="text-[var(--text-primary)]">Hey, what do you think of this theme update? 🏀</p>
+                <p className="text-[10px] text-[var(--text-secondary)] text-right mt-0.5">11:42 AM</p>
+              </div>
+            </div>
+            {/* Outgoing bubble */}
+            <div className="flex justify-end">
+              <div className="max-w-[75%] bg-brand-600 px-3 py-2 shadow-sm"
+                style={{ borderRadius: bubbleShape === 'classic' ? '18px 18px 18px 4px' : currentRadius, fontSize: currentFontPx }}>
+                <p className="text-white font-medium">Looks extremely responsive and fluid on my display screen! 🚀</p>
+                <p className="text-[10px] text-white/70 text-right mt-0.5">11:43 AM</p>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        {/* CHAT WALLPAPER */}
+        <section>
+          <p className="text-xs font-bold text-[var(--text-secondary)] uppercase tracking-widest mb-3">Chat Wallpaper</p>
+          <div className="grid grid-cols-3 gap-2">
+            {Object.entries(wallpapers).map(([id, w]) => (
+              <button key={id} onClick={() => setWallpaper(id)}
+                style={{ background: w.preview || w.bg }}
+                className={`h-20 rounded-2xl border-2 transition-all overflow-hidden relative shadow-sm ${
+                  wallpaper === id ? 'border-brand-500 scale-95' : 'border-[var(--border)]'
+                }`}>
+                {wallpaper === id && (
+                  <div className="absolute inset-0 flex items-center justify-center">
+                    <div className="w-7 h-7 rounded-full bg-white/90 flex items-center justify-center shadow-lg">
+                      <Check size={14} className="text-brand-600" />
+                    </div>
+                  </div>
+                )}
+                <span className="absolute bottom-1.5 left-0 right-0 text-center text-[10px] font-bold"
+                  style={{ color: 'white', textShadow: '0 1px 4px rgba(0,0,0,0.6)' }}>
+                  {w.label}
+                </span>
+              </button>
+            ))}
+          </div>
+        </section>
       </div>
-    </div>
-  );
+    );
+  };
+
+  const renderChatSettings = () => {
+    const soundOn = chatSettings?.soundEffects !== false;
+    const autoDownload = chatSettings?.autoDownload || 'wifi';
+    const autoLock = chatSettings?.autoLock || 'immediate';
+    const autoLockOptions = [
+      { id: 'immediate', label: 'Immediately',           sub: 'Locks whenever you exit or close the tab' },
+      { id: '1min',      label: 'After 1 minute of idle', sub: 'Gives you speed if multitasking' },
+      { id: '5min',      label: 'After 5 minutes of idle',sub: 'Medium protection interval' },
+      { id: 'session',   label: 'Session persistence',    sub: 'Only lock on manual locking action' },
+    ];
+    return (
+      <div className="p-4 space-y-6 animate-fade-in">
+
+        {/* SOUND EFFECTS */}
+        <section>
+          <div className="flex items-center justify-between p-4 bg-[var(--sidebar-bg)] border border-[var(--border)] rounded-2xl">
+            <div className="flex items-center gap-3">
+              <div className="w-9 h-9 rounded-full bg-brand-500/10 flex items-center justify-center">
+                <Volume2 size={18} className="text-brand-500" />
+              </div>
+              <div>
+                <p className="font-semibold text-sm text-[var(--text-primary)]">Sound Effects</p>
+                <p className="text-xs text-[var(--text-secondary)]">Hear sweet sound notifications on chat events</p>
+              </div>
+            </div>
+            <button onClick={() => saveChatSettings({ soundEffects: !soundOn })}
+              className={`w-12 h-6 rounded-full transition-colors flex-shrink-0 ${soundOn ? 'bg-brand-500' : 'bg-[var(--border)]'}`}>
+              <div className={`w-5 h-5 rounded-full bg-white shadow m-0.5 transition-transform ${soundOn ? 'translate-x-6' : 'translate-x-0'}`} />
+            </button>
+          </div>
+        </section>
+
+        {/* AUTO-DOWNLOAD */}
+        <section>
+          <p className="text-xs font-bold text-[var(--text-secondary)] uppercase tracking-widest mb-3 flex items-center gap-2">
+            <Wifi size={13} /> Auto-Download Over Network
+          </p>
+          <div className="space-y-2">
+            {[
+              { id: 'never', label: 'Never Auto-Download',      sub: 'Tap media to download manually' },
+              { id: 'wifi',  label: 'Only on Wi-Fi connection', sub: 'Saves your cellular/PWA data bandwidth' },
+              { id: 'all',   label: 'Wi-Fi & Mobile Cellular',  sub: 'High speed instant download always' },
+            ].map(opt => (
+              <button key={opt.id} onClick={() => saveChatSettings({ autoDownload: opt.id })}
+                className={`w-full flex items-center justify-between p-3.5 rounded-2xl border transition-all text-left ${
+                  autoDownload === opt.id
+                    ? 'border-brand-500 bg-brand-500/5'
+                    : 'border-[var(--border)] bg-[var(--sidebar-bg)]'
+                }`}>
+                <div>
+                  <p className={`text-sm font-semibold ${autoDownload === opt.id ? 'text-brand-500' : 'text-[var(--text-primary)]'}`}>{opt.label}</p>
+                  <p className="text-xs text-[var(--text-secondary)]">{opt.sub}</p>
+                </div>
+                {autoDownload === opt.id && (
+                  <div className="w-6 h-6 rounded-full bg-brand-500 flex items-center justify-center flex-shrink-0">
+                    <Check size={13} className="text-white" />
+                  </div>
+                )}
+              </button>
+            ))}
+          </div>
+        </section>
+
+        {/* SECURITY AUTO-LOCK */}
+        <section>
+          <p className="text-xs font-bold text-[var(--text-secondary)] uppercase tracking-widest mb-3 flex items-center gap-2">
+            <Lock size={13} /> Security Auto-Lock Interval
+          </p>
+          <div className="space-y-2">
+            {autoLockOptions.map(opt => (
+              <button key={opt.id} onClick={() => saveChatSettings({ autoLock: opt.id })}
+                className={`w-full flex items-center justify-between p-3.5 rounded-2xl border transition-all text-left ${
+                  autoLock === opt.id
+                    ? 'border-brand-500 bg-brand-500/5'
+                    : 'border-[var(--border)] bg-[var(--sidebar-bg)]'
+                }`}>
+                <div>
+                  <p className={`text-sm font-semibold ${autoLock === opt.id ? 'text-brand-500' : 'text-[var(--text-primary)]'}`}>{opt.label}</p>
+                  <p className="text-xs text-[var(--text-secondary)]">{opt.sub}</p>
+                </div>
+                {autoLock === opt.id && (
+                  <div className="w-6 h-6 rounded-full bg-brand-500 flex items-center justify-center flex-shrink-0">
+                    <Check size={13} className="text-white" />
+                  </div>
+                )}
+              </button>
+            ))}
+          </div>
+        </section>
+      </div>
+    );
+  };
+
 
   const renderNotifications = () => (
     <div className="p-4 space-y-2 animate-fade-in">
@@ -630,7 +807,9 @@ export default function Settings({ onBack, initialSection }) {
     main: 'Settings',
     profile: 'Edit Profile',
     notifications: 'Notifications',
-    appearance: 'Appearance',
+    appearance:    'Appearance',
+    chat_settings: 'Chat Settings',
+    app_preferences: 'App Preferences',
     privacy: 'Privacy',
     blocklist: 'Blocklist',
     chats: 'Chats',
@@ -664,11 +843,13 @@ export default function Settings({ onBack, initialSection }) {
       {/* Content */}
       <div className="flex-1 overflow-y-auto">
         <div key={section} className="animate-fade-in">
-        {section === 'main'          && renderMain()}
-        {section === 'profile'       && renderProfile()}
-        {section === 'appearance'    && renderAppearance()}
-        {section === 'notifications' && renderNotifications()}
-        {section === 'privacy'       && renderPrivacy()}
+        {section === 'main'            && renderMain()}
+        {section === 'profile'         && renderProfile()}
+        {section === 'appearance'      && renderAppearance()}
+        {section === 'chat_settings'   && renderAppearance()}
+        {section === 'app_preferences' && renderChatSettings()}
+        {section === 'notifications'   && renderNotifications()}
+        {section === 'privacy'         && renderPrivacy()}
         {section === 'blocklist'     && (
           <div className="animate-fade-in">
             <div className="px-4 pt-4 pb-2">
