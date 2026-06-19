@@ -226,6 +226,12 @@ body { font-family: 'Nunito', system-ui, sans-serif; background: var(--chat-bg);
   background: linear-gradient(135deg, #052e16 0%, #14532d 50%, #166534 100%);
 }
 
+/* Voice note animated waveform */
+@keyframes voice-pulse {
+  from { transform: scaleY(0.5); }
+  to   { transform: scaleY(1.4); }
+}
+
 /* Safe area for bottom nav on mobile */
 .safe-area-bottom { padding-bottom: env(safe-area-inset-bottom, 0px); }
 .no-scrollbar::-webkit-scrollbar { display: none; }

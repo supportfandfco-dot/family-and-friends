@@ -33,6 +33,74 @@ import MeetingRoom from './components/Calls/MeetingRoom';
 
 function AppInner() {
   const { user, profile, loading, isAuthenticated } = useAuth();
+
+  // ── Auto-lock enforcement ────────────────────────────────────
+  const [isLocked, setIsLocked] = useState(false);
+  const lockTimerRef = useRef(null);
+  const lastActivityRef = useRef(Date.now());
+
+  useEffect(() => {
+    if (!isAuthenticated) return;
+    const settings = (() => { try { return JSON.parse(localStorage.getItem('ff_chat_settings')) || {}; } catch { return {}; } })();
+    const lockInterval = settings.autoLock || 'session';
+    if (lockInterval === 'session') return; // only lock on manual action
+
+    const intervals = { immediate: 0, '1min': 60000, '5min': 300000 };
+    const ms = intervals[lockInterval];
+    if (ms === undefined) return;
+
+    const resetTimer = () => {
+      lastActivityRef.current = Date.now();
+      clearTimeout(lockTimerRef.current);
+      if (ms === 0) return; // immediate = lock on visibility change only
+      lockTimerRef.current = setTimeout(() => setIsLocked(true), ms);
+    };
+
+    const onVisibilityChange = () => {
+      if (document.hidden) {
+        if (ms === 0) setIsLocked(true);
+      } else {
+        resetTimer();
+      }
+    };
+
+    window.addEventListener('touchstart', resetTimer);
+    window.addEventListener('click', resetTimer);
+    document.addEventListener('visibilitychange', onVisibilityChange);
+    resetTimer();
+
+    return () => {
+      clearTimeout(lockTimerRef.current);
+      window.removeEventListener('touchstart', resetTimer);
+      window.removeEventListener('click', resetTimer);
+      document.removeEventListener('visibilitychange', onVisibilityChange);
+    };
+  }, [isAuthenticated]);
+
+  // ── Sound effects ─────────────────────────────────────────────
+  const playSoundEffect = useCallback((type) => {
+    const settings = (() => { try { return JSON.parse(localStorage.getItem('ff_chat_settings')) || {}; } catch { return {}; } })();
+    if (settings.soundEffects === false) return;
+    try {
+      const ctx = new (window.AudioContext || window.webkitAudioContext)();
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+      if (type === 'send') {
+        osc.frequency.value = 880;
+        gain.gain.setValueAtTime(0.08, ctx.currentTime);
+        gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.12);
+        osc.start(); osc.stop(ctx.currentTime + 0.12);
+      } else if (type === 'receive') {
+        osc.frequency.setValueAtTime(660, ctx.currentTime);
+        osc.frequency.setValueAtTime(880, ctx.currentTime + 0.07);
+        gain.gain.setValueAtTime(0.07, ctx.currentTime);
+        gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.15);
+        osc.start(); osc.stop(ctx.currentTime + 0.15);
+      }
+    } catch {}
+  }, []);
   const [activeChat, setActiveChat]       = useState(null);
   const [showSettings, setShowSettings]   = useState(false);
   const [showAddContact, setShowAddContact] = useState(false);
@@ -357,6 +425,26 @@ function AppInner() {
 
   if (!isAuthenticated) return <PhoneAuth />;
 
+  // ── Lock screen ──────────────────────────────────────────────
+  if (isLocked) {
+    return (
+      <div className="fixed inset-0 z-[999] bg-[var(--sidebar-bg)] flex flex-col items-center justify-center gap-6 p-8">
+        <div className="w-16 h-16 rounded-2xl bg-brand-500/10 flex items-center justify-center">
+          <span className="text-3xl">🔒</span>
+        </div>
+        <div className="text-center">
+          <h2 className="font-bold text-xl text-[var(--text-primary)]">Family & Friends</h2>
+          <p className="text-sm text-[var(--text-secondary)] mt-1">Tap to unlock</p>
+        </div>
+        <button
+          onClick={() => setIsLocked(false)}
+          className="w-full max-w-xs py-3 bg-brand-500 hover:bg-brand-600 text-white rounded-2xl font-semibold text-sm transition-all active:scale-95">
+          Unlock
+        </button>
+      </div>
+    );
+  }
+
   const showSidebar = !isMobile || (!activeChat && !showSettings);
   const showMain    = !isMobile || activeChat || showSettings;
 
@@ -376,6 +464,7 @@ function AppInner() {
       onVoiceCall={handleVoiceCall}
       onVideoCall={handleVideoCall}
       onOpenSettings={handleOpenSettings}
+      onSoundEffect={playSoundEffect}
     />
   ) : activeChat?.type === 'group' ? (
     <GroupChatWindow

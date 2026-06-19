@@ -31,6 +31,7 @@ import VoiceAI from '../../ai/VoiceAI';
 import MediaIntelligence from '../../ai/MediaIntelligence';
 import useAIStore from '../../ai/useAIStore';
 import { summarizeMessages, askUnify } from '../../ai/unifyService';
+import MediaGallery from './MediaGallery';
 
 // ── Emoji data ─────────────────────────────────────────
 const EMOJI_CATEGORIES = {
@@ -378,7 +379,26 @@ function PhotoViewer({ images, startIndex, onClose, onAnalyze }) {
   );
 }
 
-function MessageBubble({ msg, isOwn, onLongPress, onReaction, selected, selectionMode, onSelect, onImageClick }) {
+function MessageBubble({ msg, isOwn, onLongPress, onReaction, selected, selectionMode, onSelect, onImageClick, onSwipeReply }) {
+  // ── Swipe-to-reply ───────────────────────────────────
+  const swipeRef = useRef(null);
+  const touchStartX = useRef(0);
+  const [swipeDx, setSwipeDx] = useState(0);
+
+  const handleTouchStart = (e) => {
+    touchStartX.current = e.touches[0].clientX;
+  };
+  const handleTouchMove = (e) => {
+    const dx = e.touches[0].clientX - touchStartX.current;
+    // Only allow swipe in the right direction (right for received, left for sent)
+    const maxSwipe = 60;
+    if (isOwn && dx < 0) setSwipeDx(Math.max(dx, -maxSwipe));
+    else if (!isOwn && dx > 0) setSwipeDx(Math.min(dx, maxSwipe));
+  };
+  const handleTouchEnd = () => {
+    if (Math.abs(swipeDx) >= 50) onSwipeReply?.(msg);
+    setSwipeDx(0);
+  };
   const longPressRef = useRef(null);
   const [showReactions, setShowReactions] = useState(false);
   const isDeleted   = msg.type === 'deleted';
@@ -412,7 +432,12 @@ function MessageBubble({ msg, isOwn, onLongPress, onReaction, selected, selectio
   );
 
   return (
-    <div className={`flex mb-1 animate-fade-in relative ${isOwn?'justify-end':'justify-start'}`}
+    <div
+      className={`flex mb-1 animate-fade-in relative ${isOwn?'justify-end':'justify-start'}`}
+      onTouchStart={handleTouchStart}
+      onTouchMove={handleTouchMove}
+      onTouchEnd={handleTouchEnd}
+      style={{ transform: `translateX(${swipeDx}px)`, transition: swipeDx === 0 ? 'transform 0.2s ease' : 'none' }}
       onMouseDown={handleDown} onMouseUp={handleUp}
       onTouchStart={handleDown} onTouchEnd={handleUp}
       onClick={handleTap}>
@@ -445,13 +470,17 @@ function MessageBubble({ msg, isOwn, onLongPress, onReaction, selected, selectio
           </div>
         )}
         {/* Bubble */}
-        <div className={`px-3 py-2 rounded-2xl text-sm break-words shadow-sm ${
+        <div className={`px-3 py-2 text-sm break-words shadow-sm ${
           isDeleted
             ? 'italic opacity-40 bg-[var(--input-bg)] text-[var(--text-secondary)]'
             : isOwn
-              ? 'bg-brand-500 text-white rounded-br-sm'
-              : 'bg-[var(--input-bg)] text-[var(--text-primary)] rounded-bl-sm'
-        } ${selected ? 'ring-2 ring-brand-400' : ''}`}>
+              ? 'bg-brand-500 text-white'
+              : 'bg-[var(--input-bg)] text-[var(--text-primary)]'
+        } ${selected ? 'ring-2 ring-brand-400' : ''}`}
+          style={{
+            borderRadius: getBubbleRadius(isOwn),
+            fontSize: chatFontSize,
+          }}>
           {isDeleted ? (
             <span className="flex items-center gap-1.5"><Trash2 size={12}/> This message was deleted</span>
           ) : msg.type === 'image' ? (
@@ -481,16 +510,22 @@ function MessageBubble({ msg, isOwn, onLongPress, onReaction, selected, selectio
           {!isDeleted && (
             <div className={`flex items-center gap-1 mt-0.5 ${isOwn?'justify-end':'justify-start'}`}>
               <span className="text-[10px]" style={{opacity:0.55}}>{ts}</span>
-              {isOwn && (
-                <span className="flex-shrink-0 flex items-center" title={msg.status}>
-                  {msg.status === 'seen'
-                    ? <CheckCheck size={16} strokeWidth={2.5} style={{color:'#34d8ff', filter:'drop-shadow(0 0 2px #34d8ff55)'}}/>
-                    : msg.status === 'delivered'
-                      ? <CheckCheck size={16} strokeWidth={2.5} style={{color:'rgba(255,255,255,0.95)'}}/>
-                      : <Check size={15} strokeWidth={2.5} style={{color:'rgba(255,255,255,0.75)'}}/>
-                  }
-                </span>
-              )}
+              {isOwn && (() => {
+                // Respect partner's read receipts privacy setting
+                const partnerReadReceipts = chatPartner?.privacy?.readReceipts !== false;
+                // If partner disabled read receipts, cap status at 'delivered' visually
+                const displayStatus = (!partnerReadReceipts && msg.status === 'seen') ? 'delivered' : msg.status;
+                return (
+                  <span className="flex-shrink-0 flex items-center" title={displayStatus}>
+                    {displayStatus === 'seen'
+                      ? <CheckCheck size={16} strokeWidth={2.5} style={{color:'#34d8ff', filter:'drop-shadow(0 0 2px #34d8ff55)'}}/>
+                      : displayStatus === 'delivered'
+                        ? <CheckCheck size={16} strokeWidth={2.5} style={{color:'rgba(255,255,255,0.95)'}}/>
+                        : <Check size={15} strokeWidth={2.5} style={{color:'rgba(255,255,255,0.75)'}}/>
+                    }
+                  </span>
+                );
+              })()}
             </div>
           )}
         </div>
@@ -647,7 +682,7 @@ function SelectionBar({ count, onCancel, onDeleteMe, onDeleteAll, onForward }) {
 // ══════════════════════════════════════════════════════
 //  Main ChatWindow
 // ══════════════════════════════════════════════════════
-export default function ChatWindow({ chatPartner, onBack, onVoiceCall, onVideoCall, onOpenSettings, contacts, groups }) {
+export default function ChatWindow({ chatPartner, onBack, onVoiceCall, onVideoCall, onOpenSettings, contacts, groups, onSoundEffect }) {
   const { user, profile } = useAuth();
   const { wallpaperBg } = useTheme();
   const [messages, setMessages]           = useState([]);
@@ -670,6 +705,26 @@ export default function ChatWindow({ chatPartner, onBack, onVoiceCall, onVideoCa
       });
     });
   const [replyTo, setReplyTo]             = useState(null);
+  const [searchMode, setSearchMode]       = useState(false);
+  const [searchQuery, setSearchQuery]     = useState('');
+  const [searchIdx, setSearchIdx]         = useState(0);
+
+  // ── Chat appearance settings from localStorage ─────────────
+  const [chatAppearance] = useState(() => {
+    try { return JSON.parse(localStorage.getItem('ff_chat_settings')) || {}; } catch { return {}; }
+  });
+  const getBubbleRadius = (isOwn) => {
+    const shape = chatAppearance.bubbleShape || 'classic';
+    if (shape === 'pill')     return '999px';
+    if (shape === 'ios')      return '22px';
+    if (shape === 'brutalist') return '4px';
+    // classic WA: sender tail bottom-right, receiver tail bottom-left
+    return isOwn ? '18px 18px 4px 18px' : '18px 18px 18px 4px';
+  };
+  const chatFontSize = (() => {
+    const sz = chatAppearance.fontSize || chatAppearance.fontSizeId || 'medium';
+    return { small: 12, medium: 15, large: 17, xl: 20 }[sz] || 15;
+  })();
   const [showAttach, setShowAttach]       = useState(false);
   const [showEmoji, setShowEmoji]         = useState(false);
   const [showSearch, setShowSearch]       = useState(false);
@@ -709,6 +764,7 @@ export default function ChatWindow({ chatPartner, onBack, onVoiceCall, onVideoCa
           unifiedAnswer, setUnifiedAnswer, clearUnifiedAnswer,
           getSummaryCache, setSummaryCache } = useAIStore();
   const [showMediaAI, setShowMediaAI]       = useState(false);
+  const [showGallery, setShowGallery]       = useState(false);
   const [mediaAIImage, setMediaAIImage]     = useState(null);
   const [summaryLoading, setSummaryLoading] = useState(false);
 
@@ -740,7 +796,15 @@ export default function ChatWindow({ chatPartner, onBack, onVoiceCall, onVideoCa
   // Messages
   useEffect(() => {
     if (!chatId) return;
+    const prevCountRef = { current: 0 };
     const unsub = subscribeToMessages(chatId, msgs => {
+      const prevCount = prevCountRef.current;
+      prevCountRef.current = msgs.length;
+      // Play receive sound if a new message arrived from partner
+      if (msgs.length > prevCount && msgs.length > 0) {
+        const last = msgs[msgs.length - 1];
+        if (last?.senderId !== user.uid) onSoundEffect?.('receive');
+      }
       setMessages(msgs);
       // Only mark read if the document is visible (user is actively looking at it)
       if (document.visibilityState === 'visible') {
@@ -812,6 +876,7 @@ export default function ChatWindow({ chatPartner, onBack, onVoiceCall, onVideoCa
     try {
       await sendMessage(chatId, user.uid, content, 'text',
         replyTo ? { replyTo: { id: replyTo.id, content: replyTo.content } } : {});
+      onSoundEffect?.('send');
       pushToPartner(content, 'text');
     } catch (e) { console.error('Send failed:', e); toast.error('Failed to send'); }
     finally { setSending(false); }
@@ -1025,8 +1090,20 @@ export default function ChatWindow({ chatPartner, onBack, onVoiceCall, onVideoCa
     return `last seen ${d.toLocaleDateString([],{day:'numeric',month:'short'})}`;
   };
 
-  const presenceLabel = isOnline ? 'online' : formatLastSeen(lastSeen);
+  const presenceLabel = (() => {
+    // Respect partner's last seen privacy setting
+    const partnerPrivacy = chatPartner?.privacy?.lastSeen || 'everyone';
+    if (partnerPrivacy === 'nobody') return 'Family & Friends';
+    // 'contacts' — show only if they have us in contacts (we assume yes if we're chatting)
+    return isOnline ? 'online' : formatLastSeen(lastSeen);
+  })();
   const isBlocking = blocked; // only disable UI when I blocked them
+  // ── Message search ──────────────────────────────────────────
+  const searchResults = searchQuery.trim().length > 1
+    ? messages.filter(m => (m.content || '').toLowerCase().includes(searchQuery.toLowerCase()))
+    : [];
+  const searchCurrentMsg = searchResults[searchIdx] || null;
+
   const closeAll = () => { setShowMenu(false); setShowAttach(false); setShowEmoji(false); };
 
   // ── UnifyAI helpers ────────────────────────────────────────
@@ -1136,6 +1213,10 @@ export default function ChatWindow({ chatPartner, onBack, onVoiceCall, onVideoCa
           <button onClick={() => onVideoCall?.(chatPartner)} className="w-9 h-9 rounded-xl hover:bg-[var(--hover)] flex items-center justify-center">
             <Video size={18} className="text-[var(--text-secondary)]"/>
           </button>
+          <button onClick={() => { setSearchMode(v => !v); setSearchQuery(''); setSearchIdx(0); }}
+            className={`w-9 h-9 rounded-xl flex items-center justify-center transition-all ${searchMode ? 'bg-brand-500/15' : 'hover:bg-[var(--hover)]'}`}>
+            <Search size={17} className={searchMode ? 'text-brand-500' : 'text-[var(--text-secondary)]'}/>
+          </button>
           <div className="relative">
             <button onClick={e => { e.stopPropagation(); setShowMenu(v=>!v); }}
               className="w-9 h-9 rounded-xl hover:bg-[var(--hover)] flex items-center justify-center">
@@ -1147,6 +1228,7 @@ export default function ChatWindow({ chatPartner, onBack, onVoiceCall, onVideoCa
                 {[
                   { label: '✨ Ask UnifyAI', action: () => { setShowMenu(false); handleOpenOverlay(); } },
                   { label: '📋 Summarize Chat', action: handleSummarize },
+                  { label: '🖼 Media Gallery', action: () => { setShowMenu(false); setShowGallery(true); } },
                   { label: muted ? '🔔 Unmute' : '🔕 Mute', action: handleMute },
                   { label: '🎨 Wallpaper', action: () => { onOpenSettings?.('appearance'); setShowMenu(false); } },
                   { label: '🗑 Clear Chat', action: handleClearChat },
@@ -1186,21 +1268,66 @@ export default function ChatWindow({ chatPartner, onBack, onVoiceCall, onVideoCa
       )}
 
       {/* MESSAGES */}
+      {/* SEARCH BAR */}
+      {searchMode && (
+        <div className="flex items-center gap-2 px-3 py-2 bg-[var(--sidebar-bg)] border-b border-[var(--border)] flex-shrink-0 animate-slide-down"
+          onClick={e => e.stopPropagation()}>
+          <Search size={15} className="text-[var(--text-secondary)] flex-shrink-0"/>
+          <input
+            autoFocus
+            value={searchQuery}
+            onChange={e => { setSearchQuery(e.target.value); setSearchIdx(0); }}
+            placeholder="Search in conversation…"
+            className="flex-1 bg-transparent text-sm text-[var(--text-primary)] placeholder:text-[var(--text-secondary)] outline-none"
+          />
+          {searchResults.length > 0 && (
+            <div className="flex items-center gap-1 flex-shrink-0">
+              <span className="text-xs text-[var(--text-secondary)]">{searchIdx + 1}/{searchResults.length}</span>
+              <button onClick={() => setSearchIdx(i => (i - 1 + searchResults.length) % searchResults.length)}
+                className="w-7 h-7 rounded-lg hover:bg-[var(--hover)] flex items-center justify-center">
+                <ChevronLeft size={15} className="text-[var(--text-secondary)]"/>
+              </button>
+              <button onClick={() => setSearchIdx(i => (i + 1) % searchResults.length)}
+                className="w-7 h-7 rounded-lg hover:bg-[var(--hover)] flex items-center justify-center">
+                <ChevronRight size={15} className="text-[var(--text-secondary)]"/>
+              </button>
+            </div>
+          )}
+          {searchQuery && searchResults.length === 0 && (
+            <span className="text-xs text-[var(--text-secondary)] flex-shrink-0">No results</span>
+          )}
+          <button onClick={() => { setSearchMode(false); setSearchQuery(''); }}
+            className="w-7 h-7 rounded-lg hover:bg-[var(--hover)] flex items-center justify-center flex-shrink-0">
+            <X size={14} className="text-[var(--text-secondary)]"/>
+          </button>
+        </div>
+      )}
+
       <div className="flex-1 overflow-y-auto px-4 py-3" style={{scrollbarWidth:'thin'}}>
-        {visible.map(msg => (
-          <MessageBubble
-            key={msg.id} msg={msg}
-            isOwn={msg.senderId === user.uid}
-            selected={selectedMsgs.some(m => m.id === msg.id)}
-            selectionMode={selectionMode}
-            onSelect={selectionMode ? toggleMsgSelect : enterSelectionMode}
-            onLongPress={msg => {
-              if (!selectionMode) { setSelectedMsg(msg); }
-              else enterSelectionMode(msg);
-            }}
-            onReaction={handleReaction}
-            onImageClick={handleImageClick}/>
-        ))}
+        {visible.map((msg, _i) => {
+          const isSearchMatch = searchMode && searchQuery.trim().length > 1
+            && (msg.content || '').toLowerCase().includes(searchQuery.toLowerCase());
+          const isCurrentResult = searchCurrentMsg?.id === msg.id;
+          return (
+            <div key={msg.id}
+              ref={isCurrentResult ? el => el?.scrollIntoView({ behavior: 'smooth', block: 'center' }) : null}
+              className={isCurrentResult ? 'ring-2 ring-brand-400 ring-offset-2 ring-offset-[var(--chat-bg)] rounded-2xl transition-all' : ''}>
+              <MessageBubble
+                msg={msg}
+                isOwn={msg.senderId === user.uid}
+                selected={selectedMsgs.some(m => m.id === msg.id)}
+                selectionMode={selectionMode}
+                onSelect={selectionMode ? toggleMsgSelect : enterSelectionMode}
+                onLongPress={msg => {
+                  if (!selectionMode) { setSelectedMsg(msg); }
+                  else enterSelectionMode(msg);
+                }}
+                onReaction={handleReaction}
+                onSwipeReply={(m) => { setEditingMsg(null); setEditText(''); setReplyTo(m); }}
+                onImageClick={handleImageClick}/>
+            </div>
+          );
+        })}
         {partnerTyping && (
           <div className="flex justify-start mb-1 animate-fade-in">
             <div className="bg-[var(--input-bg)] rounded-2xl rounded-bl-sm px-4 py-3 flex items-center gap-1.5">
@@ -1438,6 +1565,19 @@ export default function ChatWindow({ chatPartner, onBack, onVoiceCall, onVideoCa
             <MediaIntelligence imageBase64={mediaAIImage} onClose={() => setShowMediaAI(false)} />
           </div>
         </>
+      )}
+
+      {/* MEDIA GALLERY */}
+      {showGallery && (
+        <MediaGallery
+          chatId={chatId}
+          isGroup={false}
+          onClose={() => setShowGallery(false)}
+          onViewImage={(url) => {
+            setShowGallery(false);
+            setPhotoViewer({ images: [{ content: url }], startIndex: 0 });
+          }}
+        />
       )}
     </div>
   );

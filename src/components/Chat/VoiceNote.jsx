@@ -361,15 +361,21 @@ export function VoiceMessage({ url, duration, isOwn }) {
             audioRef.current.currentTime = p * audioRef.current.duration;
             setProgress(p * 100);
           }}>
-          {bars.map((h, i) => (
-            <div key={i} className="rounded-full transition-colors duration-75 flex-shrink-0" style={{
-              width: '2.5px',
-              height: `${h}px`,
-              background: i < filled
-                ? (isOwn ? 'rgba(255,255,255,0.9)' : '#16a34a')
-                : (isOwn ? 'rgba(255,255,255,0.3)' : 'rgba(22,163,74,0.3)')
-            }}/>
-          ))}
+          {bars.map((h, i) => {
+            const isFilled = i < filled;
+            const isActive = playing && Math.abs(i - filled) <= 2;
+            const animatedH = isActive ? h * (1 + 0.4 * Math.sin(Date.now() / 150 + i)) : h;
+            return (
+              <div key={i} className="rounded-full flex-shrink-0 transition-all duration-75" style={{
+                width: '2.5px',
+                height: `${Math.max(3, isActive ? animatedH : h)}px`,
+                background: isFilled
+                  ? (isOwn ? 'rgba(255,255,255,0.9)' : '#16a34a')
+                  : (isOwn ? 'rgba(255,255,255,0.3)' : 'rgba(22,163,74,0.3)'),
+                animation: isActive ? `voice-pulse ${0.3 + i * 0.05}s ease-in-out infinite alternate` : 'none',
+              }}/>
+            );
+          })}
         </div>
         <span className="text-[11px] font-mono tabular-nums block" style={{opacity:0.55}}>
           {errored ? '⚠ error' : playing ? fmt(current) : fmt(duration || 0)}

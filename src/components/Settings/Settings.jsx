@@ -14,6 +14,7 @@ import {
   MessageCircle, Wifi,
 } from 'lucide-react';
 import toast from 'react-hot-toast';
+import HiddenChats from './HiddenChats';
 import { db, doc, onSnapshot, unblockUser, getDoc, uploadMedia } from '../../firebase';
 
 // ── Blocklist Panel ───────────────────────────────────
@@ -806,7 +807,8 @@ export default function Settings({ onBack, initialSection }) {
   const sectionTitles = {
     main: 'Settings',
     profile: 'Edit Profile',
-    notifications: 'Notifications',
+    notifications:   'Notifications',
+    hidden_chats:    'Hidden Chats',
     appearance:    'Appearance',
     chat_settings: 'Chat Settings',
     app_preferences: 'App Preferences',
@@ -849,6 +851,7 @@ export default function Settings({ onBack, initialSection }) {
         {section === 'chat_settings'   && renderAppearance()}
         {section === 'app_preferences' && renderChatSettings()}
         {section === 'notifications'   && renderNotifications()}
+        {section === 'hidden_chats'    && <HiddenChats onBack={() => setSection('main')} />}
         {section === 'privacy'         && renderPrivacy()}
         {section === 'blocklist'     && (
           <div className="animate-fade-in">
