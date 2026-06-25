@@ -6,7 +6,7 @@
 import { useRef, useState, useCallback, useEffect } from 'react';
 import {
   db, doc, onSnapshot,
-  createGroupCall, joinGroupCallDoc, endGroupCallDoc,
+  createGroupCall, createGroupCallWithId, joinGroupCallDoc, endGroupCallDoc,
   subscribeToGroupCallDoc, subscribeToGroupSignals,
   storeGroupOffer, storeGroupAnswer,
   addGroupIceCandidate, subscribeToGroupCandidates,
@@ -295,6 +295,76 @@ export function useGroupWebRTC(currentUserId) {
     }
   }, [getLocalStream, offerToPeer, listenForOffers, watchCallDoc, cleanup]);
 
+  // ── Start a MEETING call — host, deterministic call ID ──
+  // Used by MeetingRoom.jsx: the meeting code IS the call ID,
+  // so admitted participants can join the exact same signaling doc.
+  const startMeetingCall = useCallback(async (meetingCode, meetingName, callerName, type = 'video') => {
+    const uid = uidRef.current;
+    setGcType(type);
+    setGcInfo({ id: meetingCode, name: meetingName });
+    setGcStatus('waiting');
+
+    try {
+      await getLocalStream(type === 'video');
+
+      const cid = await createGroupCallWithId(meetingCode, meetingName, uid, callerName || 'Host', type);
+      setGcCallId(cid);
+      setGcParticipants([uid]);
+
+      listenForOffers(cid);
+      watchCallDoc(cid);
+
+      if (!timerRef.current) {
+        timerRef.current = setInterval(() => setCallDuration(d => d + 1), 1000);
+      }
+      setGcStatus('active');
+    } catch (e) {
+      cleanup();
+      throw e;
+    }
+  }, [getLocalStream, listenForOffers, watchCallDoc, cleanup]);
+
+  // ── Join a MEETING call — participant, after host admission ──
+  // The meeting code is already known to be valid (admission already
+  // happened in the waiting room) — this just joins the signaling doc.
+  const joinMeetingCall = useCallback(async (meetingCode, meetingName, type = 'video') => {
+    const uid = uidRef.current;
+    setGcType(type);
+    setGcInfo({ id: meetingCode, name: meetingName });
+    setGcStatus('active');
+    setGcCallId(meetingCode);
+
+    try {
+      await getLocalStream(type === 'video');
+
+      // Read current participants before joining, so we know who to offer to
+      let existing = [];
+      try {
+        const snap = await new Promise((resolve) => {
+          const unsub = onSnapshot(doc(db, 'groupCalls', meetingCode), (s) => { unsub(); resolve(s); });
+        });
+        existing = (snap.exists() ? snap.data()?.participants : []) || [];
+      } catch {}
+
+      await joinGroupCallDoc(meetingCode, uid);
+      setGcParticipants([...existing.filter(p => p !== uid), uid]);
+
+      for (const peerUid of existing.filter(p => p !== uid)) {
+        await offerToPeer(meetingCode, peerUid);
+      }
+
+      listenForOffers(meetingCode);
+      watchCallDoc(meetingCode);
+
+      if (!timerRef.current) {
+        timerRef.current = setInterval(() => setCallDuration(d => d + 1), 1000);
+      }
+    } catch (e) {
+      cleanup();
+      throw e;
+    }
+  }, [getLocalStream, offerToPeer, listenForOffers, watchCallDoc, cleanup]);
+
   // ── Leave call ────────────────────────────────────────
   const leaveGroupCall = useCallback(async () => {
     const cid = callIdRef.current;
@@ -357,6 +427,7 @@ export function useGroupWebRTC(currentUserId) {
     localStream,
     localVideoRef,
     startGroupCall, joinGroupCall, leaveGroupCall,
+    startMeetingCall, joinMeetingCall,
     toggleGroupMute, toggleGroupVideo,
     formatDuration,
   };

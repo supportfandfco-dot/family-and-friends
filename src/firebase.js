@@ -653,6 +653,28 @@ export async function createGroupCall(groupId, groupName, initiatorId, initiator
   } catch (e) { console.error('createGroupCall:', e); throw e; }
 }
 
+// ── Deterministic-ID variant for Meeting Rooms ────────────────
+// Uses the meeting room code AS the groupCalls document ID, so
+// participants admitted via the waiting room can join the exact
+// same WebRTC signaling document without any invite mechanism.
+export async function createGroupCallWithId(callId, groupName, initiatorId, initiatorName, type) {
+  try {
+    await setDoc(doc(db, 'groupCalls', callId), {
+      groupId: callId,
+      groupName,
+      initiatorId,
+      initiatorName,
+      type,
+      status: 'ringing',
+      participants: [initiatorId],
+      invitedMembers: [],
+      isMeeting: true,
+      createdAt: serverTimestamp(),
+    }, { merge: true });
+    return callId;
+  } catch (e) { console.error('createGroupCallWithId:', e); throw e; }
+}
+
 export async function joinGroupCallDoc(callId, uid) {
   try {
     await updateDoc(doc(db, 'groupCalls', callId), {

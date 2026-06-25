@@ -380,6 +380,25 @@ function PhotoViewer({ images, startIndex, onClose, onAnalyze }) {
 }
 
 function MessageBubble({ msg, isOwn, onLongPress, onReaction, selected, selectionMode, onSelect, onImageClick, onSwipeReply }) {
+  // ── Chat appearance settings — read directly in this component's
+  //    own scope, since MessageBubble is a separate function from
+  //    ChatWindow and cannot see ChatWindow's local variables ──────
+  const chatAppearance = (() => {
+    try { return JSON.parse(localStorage.getItem('ff_chat_settings')) || {}; } catch { return {}; }
+  })();
+  const getBubbleRadius = (own) => {
+    const shape = chatAppearance.bubbleShape || 'classic';
+    if (shape === 'pill')      return '999px';
+    if (shape === 'ios')       return '22px';
+    if (shape === 'brutalist') return '4px';
+    // classic WA: sender tail bottom-right, receiver tail bottom-left
+    return own ? '18px 18px 4px 18px' : '18px 18px 18px 4px';
+  };
+  const chatFontSize = (() => {
+    const sz = chatAppearance.fontSize || chatAppearance.fontSizeId || 'medium';
+    return { small: 12, medium: 15, large: 17, xl: 20 }[sz] || 15;
+  })();
+
   // ── Swipe-to-reply ───────────────────────────────────
   const swipeRef = useRef(null);
   const touchStartX = useRef(0);
@@ -708,23 +727,6 @@ export default function ChatWindow({ chatPartner, onBack, onVoiceCall, onVideoCa
   const [searchMode, setSearchMode]       = useState(false);
   const [searchQuery, setSearchQuery]     = useState('');
   const [searchIdx, setSearchIdx]         = useState(0);
-
-  // ── Chat appearance settings from localStorage ─────────────
-  const [chatAppearance] = useState(() => {
-    try { return JSON.parse(localStorage.getItem('ff_chat_settings')) || {}; } catch { return {}; }
-  });
-  const getBubbleRadius = (isOwn) => {
-    const shape = chatAppearance.bubbleShape || 'classic';
-    if (shape === 'pill')     return '999px';
-    if (shape === 'ios')      return '22px';
-    if (shape === 'brutalist') return '4px';
-    // classic WA: sender tail bottom-right, receiver tail bottom-left
-    return isOwn ? '18px 18px 4px 18px' : '18px 18px 18px 4px';
-  };
-  const chatFontSize = (() => {
-    const sz = chatAppearance.fontSize || chatAppearance.fontSizeId || 'medium';
-    return { small: 12, medium: 15, large: 17, xl: 20 }[sz] || 15;
-  })();
   const [showAttach, setShowAttach]       = useState(false);
   const [showEmoji, setShowEmoji]         = useState(false);
   const [showSearch, setShowSearch]       = useState(false);

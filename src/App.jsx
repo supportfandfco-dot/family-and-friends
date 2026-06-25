@@ -125,6 +125,7 @@ function AppInner() {
     isMuted: gcMuted, isVideoOff: gcVideoOff, callDuration: gcDuration,
     remoteStreams, localStream: gcLocalStream, localVideoRef: gcLocalVideoRef,
     startGroupCall, joinGroupCall, leaveGroupCall,
+    startMeetingCall, joinMeetingCall,
     toggleGroupMute, toggleGroupVideo, formatDuration: gcFormat,
   } = useGroupWebRTC(user?.uid);
 
@@ -507,11 +508,20 @@ function AppInner() {
         <MeetingRoom
           meetingCode={activeMeeting.code}
           isHost={activeMeeting.isHost}
-          onStartCall={() => {
-            // After host starts or participant is admitted — close meeting room
-            // (in full impl this would open the video call)
-            setActiveMeeting(null);
-            toast.success('Starting video feed…');
+          onStartCall={async () => {
+            const meetingName = `Meeting ${activeMeeting.code}`;
+            try {
+              const allowed = await checkMediaPermission(true);
+              if (!allowed) return;
+              if (activeMeeting.isHost) {
+                await startMeetingCall(activeMeeting.code, meetingName, profile?.name, 'video');
+              } else {
+                await joinMeetingCall(activeMeeting.code, meetingName, 'video');
+              }
+              setActiveMeeting(null);
+            } catch (err) {
+              toast.error(err.message || 'Could not join meeting video feed.');
+            }
           }}
           onClose={() => setActiveMeeting(null)}
         />
