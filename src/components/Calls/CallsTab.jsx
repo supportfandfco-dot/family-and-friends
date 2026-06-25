@@ -348,4 +348,3 @@ export default function CallsTab({ contacts = [], onVoiceCall, onVideoCall }) {
   );
 }
 
-export default CallsTab;

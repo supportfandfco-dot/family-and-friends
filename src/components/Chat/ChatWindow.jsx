@@ -458,7 +458,6 @@ function MessageBubble({ msg, isOwn, onLongPress, onReaction, selected, selectio
       onTouchEnd={handleTouchEnd}
       style={{ transform: `translateX(${swipeDx}px)`, transition: swipeDx === 0 ? 'transform 0.2s ease' : 'none' }}
       onMouseDown={handleDown} onMouseUp={handleUp}
-      onTouchStart={handleDown} onTouchEnd={handleUp}
       onClick={handleTap}>
       {/* Selection indicator */}
       {selectionMode && (
