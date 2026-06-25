@@ -347,4 +347,3 @@ export default function CallsTab({ contacts = [], onVoiceCall, onVideoCall }) {
     </div>
   );
 }
-

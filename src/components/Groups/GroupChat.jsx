@@ -2,7 +2,7 @@
 //  GroupChat — Group Conversations
 //  Family & Friends  ·  Built by Ishrit Sachdeva
 // ═══════════════════════════════════════════════════════
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useMemo } from 'react';
 import { useAuth } from '../../contexts/AuthContext';
 import { useTheme } from '../../contexts/ThemeContext';
 import {
@@ -992,7 +992,17 @@ export function GroupChatWindow({ group: initialGroup, onBack, contacts: propCon
     return unsub;
   }, [group?.id, memberProfiles]);
 
-  useEffect(() => { bottomRef.current?.scrollIntoView({ behavior: 'smooth' }); }, [messages]);
+  // Smart scroll: only auto-scroll when a NEW message arrives AND user is near the bottom
+  const prevGroupMsgCountRef = useRef(0);
+  useEffect(() => {
+    const newCount = messages.length;
+    if (newCount > prevGroupMsgCountRef.current) {
+      const container = bottomRef.current?.parentElement;
+      const nearBottom = !container || (container.scrollHeight - container.scrollTop - container.clientHeight < 200);
+      if (nearBottom) bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
+    }
+    prevGroupMsgCountRef.current = newCount;
+  }, [messages]);
 
   const handleTextChange = val => {
     setText(val);
@@ -1004,17 +1014,21 @@ export function GroupChatWindow({ group: initialGroup, onBack, contacts: propCon
   const handleSend = async () => {
     const content = text.trim();
     if (!content || !group) return;
+    // Capture reply before clearing — optimistic clear
+    const currentReply = replyTo;
     setText(''); setReplyTo(null); setShowEmoji(false);
     clearTyping(group.id, user.uid, true).catch(()=>{});
-    await sendGroupMessage(group.id, user.uid, content, 'text',
-      replyTo ? { replyTo: { id: replyTo.id, content: replyTo.content } } : {}, group.members || []);
-    // Push to all other members
-    const preview = makePreview(content, 'text');
-    const senderName = profile?.name || 'Someone';
-    (group.members || []).filter(id => id !== user.uid).forEach(memberId => {
-      sendPushNotification(memberId, `${group.name}: ${senderName}`, preview,
-        { groupId: group.id, tag: `group-${group.id}` }).catch(() => {});
-    });
+    try {
+      await sendGroupMessage(group.id, user.uid, content, 'text',
+        currentReply ? { replyTo: { id: currentReply.id, content: currentReply.content } } : {}, group.members || []);
+      // Push to all other members
+      const preview = makePreview(content, 'text');
+      const senderName = profile?.name || 'Someone';
+      (group.members || []).filter(id => id !== user.uid).forEach(memberId => {
+        sendPushNotification(memberId, `${group.name}: ${senderName}`, preview,
+          { groupId: group.id, tag: `group-${group.id}` }).catch(() => {});
+      });
+    } catch { setText(content); toast.error('Failed to send — tap to retry'); }
   };
 
   const handleFile = async e => {
@@ -1184,9 +1198,12 @@ export function GroupChatWindow({ group: initialGroup, onBack, contacts: propCon
   const exitSelectionMode  = () => { setSelectionMode(false); setSelectedMsgs([]); };
   const toggleMsgSelect    = msg => setSelectedMsgs(p => p.find(m=>m.id===msg.id) ? p.filter(m=>m.id!==msg.id) : [...p,msg]);
 
-  const visible = messages
-    .filter(m => !m.deletedFor?.includes(user.uid))
-    .filter(m => !searchQ || m.content?.toLowerCase().includes(searchQ.toLowerCase()));
+  const visible = useMemo(() =>
+    messages
+      .filter(m => !m.deletedFor?.includes(user.uid))
+      .filter(m => !searchQ || m.content?.toLowerCase().includes(searchQ.toLowerCase())),
+    [messages, user?.uid, searchQ]
+  );
 
   const typingLabel = typingUsers.length===1 ? `${typingUsers[0]} is typing...`
     : typingUsers.length > 1 ? `${typingUsers[0]} and ${typingUsers.length-1} more typing...` : '';

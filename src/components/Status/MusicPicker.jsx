@@ -22,12 +22,9 @@ async function fetchTracks(query) {
   const url = query
     ? `${API}/search?q=${encodeURIComponent(query)}&limit=40`
     : `${API}/chart/0/tracks?limit=40`;
-  console.log('[MusicPicker] Fetching:', url);
   const res  = await fetch(url);
-  console.log('[MusicPicker] Response status:', res.status);
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
   const json = await res.json();
-  console.log('[MusicPicker] Got data, total:', json.data?.length || json.tracks?.data?.length || 0);
   const list = json.data || json.tracks?.data || [];
   return list.filter(t => t.preview);
 }

@@ -4,7 +4,7 @@
 //  Chat tab sub-tabs: All | Unread | Groups
 //  Long-press context menu: Archive / Unarchive
 // ═══════════════════════════════════════════════════════
-import { useState, useEffect, useRef, useCallback } from 'react';
+import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { useAuth } from '../../contexts/AuthContext';
 import {
   db, subscribeToChats, subscribeToGroups, getUserById,
@@ -276,9 +276,12 @@ export default function ChatList({ onSelectChat, onSelectGroup, onOpenSettings, 
 
   useEffect(() => {
     if (!profile?.contacts?.length) { setContacts([]); return; }
+    let stale = false;
     Promise.all(profile.contacts.map(id => getUserById(id)))
-      .then(list => setContacts(list.filter(Boolean)));
-  }, [profile?.contacts]);
+      .then(list => { if (!stale) setContacts(list.filter(Boolean)); })
+      .catch(() => {});
+    return () => { stale = true; };
+  }, [profile?.contacts?.join?.(',')]);
 
   // Load chat partner profiles — batch load to prevent ghost chats
   useEffect(() => {
@@ -304,49 +307,55 @@ export default function ChatList({ onSelectChat, onSelectGroup, onOpenSettings, 
     });
   }, [chats.map(c => c.id).join(','), user?.uid]);
 
-  // Presence
+  // Presence — subscribe once per unique partner ID, re-subscribe only if the set changes
+  const partnerIdsKey = chats.map(c => c.participants?.find(id => id !== user?.uid)).filter(Boolean).sort().join(',');
   useEffect(() => {
     if (!user || !chats.length) return;
-    const unsubs = chats.map(chat => {
-      const pid = chat.participants?.find(id => id !== user.uid);
-      if (!pid) return null;
-      return subscribeToPresence(pid, s =>
+    const pids = [...new Set(chats.map(c => c.participants?.find(id => id !== user.uid)).filter(Boolean))];
+    const unsubs = pids.map(pid =>
+      subscribeToPresence(pid, s =>
         setOnlineMap(prev => ({ ...prev, [pid]: s?.state === 'online' }))
-      );
-    }).filter(Boolean);
+      )
+    );
     return () => unsubs.forEach(u => u?.());
-  }, [chats, user]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [partnerIdsKey, user?.uid]);
 
   // ── Derived lists ─────────────────────────────────────
-  const allChats = chats.filter(c => {
-    if (c.archived) return false;
-    // Reappear logic: if deletedFor has a timestamp and lastMessage is NEWER, show again
-    const deletedTs = c.deletedFor?.[user?.uid];
-    if (deletedTs) {
-      const deletedMs = deletedTs?.seconds ? deletedTs.seconds * 1000 : Number(deletedTs);
-      const lastMsgMs = c.lastMessage?.timestamp?.seconds
-        ? c.lastMessage.timestamp.seconds * 1000
-        : 0;
-      // If last message is newer than deletion → reappear
-      if (lastMsgMs <= deletedMs) return false;
-    }
-    const p = chatPreviews[c.id];
-    return !search || p?.name?.toLowerCase().includes(search.toLowerCase());
-  }).sort((a, b) => (b.pinned ? 1 : 0) - (a.pinned ? 1 : 0));
-  const unreadChats = allChats.filter(c => (c.unread?.[user?.uid] || 0) > 0);
-  const allGroups = groups.filter(g => {
-    if (g.archived) return false;
-    if (g.deletedFor?.[user?.uid]) return false;
-    return !search || g.name?.toLowerCase().includes(search.toLowerCase());
-  }).sort((a, b) => (b.pinned ? 1 : 0) - (a.pinned ? 1 : 0));
-  const unreadGroups = allGroups.filter(g => (g.unread?.[user?.uid] || 0) > 0);
-  const archivedChats = chats.filter(c => c.archived);
-  const archivedGroups = groups.filter(g => g.archived);
+  const { allChats, unreadChats, allGroups, unreadGroups, archivedChats, archivedGroups, totalChatUnread } = useMemo(() => {
+    const uid = user?.uid;
+    const aC = chats.filter(c => {
+      if (c.archived) return false;
+      const deletedTs = c.deletedFor?.[uid];
+      if (deletedTs) {
+        const deletedMs = deletedTs?.seconds ? deletedTs.seconds * 1000 : Number(deletedTs);
+        const lastMsgMs = c.lastMessage?.timestamp?.seconds ? c.lastMessage.timestamp.seconds * 1000 : 0;
+        if (lastMsgMs <= deletedMs) return false;
+      }
+      const p = chatPreviews[c.id];
+      return !search || p?.name?.toLowerCase().includes(search.toLowerCase());
+    }).sort((a, b) => (b.pinned ? 1 : 0) - (a.pinned ? 1 : 0));
 
-  // Total unread counts for bottom tab badges
-  const totalChatUnread = [...chats, ...groups]
-    .filter(c => !c.archived)
-    .reduce((sum, c) => sum + (c.unread?.[user?.uid] || 0), 0);
+    const aG = groups.filter(g => {
+      if (g.archived) return false;
+      if (g.deletedFor?.[uid]) return false;
+      return !search || g.name?.toLowerCase().includes(search.toLowerCase());
+    }).sort((a, b) => (b.pinned ? 1 : 0) - (a.pinned ? 1 : 0));
+
+    const total = [...chats, ...groups]
+      .filter(c => !c.archived)
+      .reduce((sum, c) => sum + (c.unread?.[uid] || 0), 0);
+
+    return {
+      allChats: aC,
+      unreadChats: aC.filter(c => (c.unread?.[uid] || 0) > 0),
+      allGroups: aG,
+      unreadGroups: aG.filter(g => (g.unread?.[uid] || 0) > 0),
+      archivedChats: chats.filter(c => c.archived),
+      archivedGroups: groups.filter(g => g.archived),
+      totalChatUnread: total,
+    };
+  }, [chats, groups, chatPreviews, search, user?.uid]);
 
   // ── Context menu handlers ─────────────────────────────
   const openMenu = useCallback((e, item, isGroup) => {

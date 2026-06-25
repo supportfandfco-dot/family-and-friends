@@ -15,7 +15,6 @@ async function saveToken(uid, token) {
       fcmToken: token,
       fcmUpdatedAt: serverTimestamp(),
     });
-    console.log('FCM token saved:', token.slice(0, 20) + '...');
   } catch (e) {
     console.warn('Failed to save token:', e);
   }

@@ -140,7 +140,8 @@ export async function getOrCreateChat(uid1, uid2) {
   return chatId;
 }
 
-export async function sendMessage(chatId, senderId, content, type = 'text', extra = {}) {
+export async function sendMessage(chatId, senderId, content, type = 'text', extra = {}, senderName = '') {
+  // Fire-and-forget the message doc — don't block on it
   const msgRef = await addDoc(collection(db, 'chats', chatId, 'messages'), {
     senderId, content, type,
     timestamp: serverTimestamp(),
@@ -149,21 +150,9 @@ export async function sendMessage(chatId, senderId, content, type = 'text', extr
     ...extra
   });
 
-  // Get sender profile for senderName in lastMessage
-  let senderName = '';
-  try {
-    const senderSnap = await getDoc(doc(db, 'users', senderId));
-    senderName = senderSnap.data()?.name || '';
-  } catch {}
-
-  // Get participants from the chat doc (reliable, not chatId splitting)
-  let participantIds = chatId.split('_'); // fallback
-  try {
-    const chatSnap = await getDoc(doc(db, 'chats', chatId));
-    if (chatSnap.exists()) {
-      participantIds = chatSnap.data().participants || participantIds;
-    }
-  } catch {}
+  // Derive participants from chatId (format: uid1_uid2) — avoids an extra Firestore read on every send
+  // senderName passed in by caller if available, otherwise we skip the profile lookup
+  const participantIds = chatId.split('_').filter(Boolean);
 
   const updates = {
     lastMessage: { content, type, senderId, senderName, timestamp: serverTimestamp(), id: msgRef.id }
@@ -777,7 +766,6 @@ export async function initFCMToken(uid) {
     await navigator.serviceWorker.ready;
     const token = await getToken(msg, { vapidKey, serviceWorkerRegistration: reg });
     if (token) {
-      console.log('FCM token:', token);
       await updateDoc(doc(db, 'users', uid), { fcmToken: token, fcmUpdatedAt: serverTimestamp() });
     }
     return token;

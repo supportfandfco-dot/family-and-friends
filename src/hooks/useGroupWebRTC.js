@@ -399,14 +399,17 @@ export function useGroupWebRTC(currentUserId) {
   };
 
   // Start timer and switch to 'active' when a second participant joins
+  // Note: gcStatus intentionally excluded from deps to avoid re-run loop when we setGcStatus here
+  const gcStatusRef = useRef('idle');
+  useEffect(() => { gcStatusRef.current = gcStatus; }, [gcStatus]);
   useEffect(() => {
-    if (gcParticipants.length >= 2 && (gcStatus === 'waiting' || gcStatus === 'active')) {
+    if (gcParticipants.length >= 2 && (gcStatusRef.current === 'waiting' || gcStatusRef.current === 'active')) {
       setGcStatus('active');
       if (!timerRef.current) {
         timerRef.current = setInterval(() => setCallDuration(d => d + 1), 1000);
       }
     }
-  }, [gcParticipants.length, gcStatus]);
+  }, [gcParticipants.length]);
 
   // Re-attach local stream to video element whenever stream or ref changes
   useEffect(() => {

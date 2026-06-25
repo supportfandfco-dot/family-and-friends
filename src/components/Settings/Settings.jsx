@@ -6,7 +6,6 @@
 import { useState, useRef, useEffect } from 'react';
 import { useAuth } from '../../contexts/AuthContext';
 import { useTheme } from '../../contexts/ThemeContext';
-import { uploadFile } from '../../firebase';
 import {
   User, Bell, Lock, Palette, Moon, Sun, Monitor, HelpCircle,
   LogOut, ChevronRight, Edit3, Camera, Check, ArrowLeft,
@@ -16,7 +15,7 @@ import {
 } from 'lucide-react';
 import toast from 'react-hot-toast';
 import HiddenChats from './HiddenChats';
-import { db, doc, onSnapshot, unblockUser, getDoc, uploadMedia } from '../../firebase';
+import { db, doc, onSnapshot, unblockUser, getDoc, uploadMedia, uploadFile } from '../../firebase';
 
 // ── Blocklist Panel ───────────────────────────────────
 function BlocklistPanel({ uid }) {

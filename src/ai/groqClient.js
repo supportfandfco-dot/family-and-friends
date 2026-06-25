@@ -23,7 +23,6 @@ async function checkApiOnce() {
     });
     const data = await res.json();
     if (res.ok && data.choices) {
-      console.log('[AI] ✅ Groq API reachable');
     } else {
       console.error('[AI] ❌ Groq API error:', data.error?.message || res.status,
         '— Check GROQ_API_KEY in Cloudflare Pages → Settings → Environment Variables');

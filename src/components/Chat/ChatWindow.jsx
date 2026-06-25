@@ -2,7 +2,7 @@
 //  ChatWindow — Private Chat (Full Features)
 //  Family & Friends  ·  Built by Ishrit Sachdeva
 // ═══════════════════════════════════════════════════════
-import { useState, useEffect, useRef, useCallback } from 'react';
+import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { useTheme } from '../../contexts/ThemeContext';
 import {
   ArrowLeft, Phone, Video, MoreVertical, Send, Paperclip,
@@ -453,9 +453,9 @@ function MessageBubble({ msg, isOwn, onLongPress, onReaction, selected, selectio
   return (
     <div
       className={`flex mb-1 animate-fade-in relative ${isOwn?'justify-end':'justify-start'}`}
-      onTouchStart={handleTouchStart}
+      onTouchStart={(e) => { handleTouchStart(e); handleDown(e); }}
       onTouchMove={handleTouchMove}
-      onTouchEnd={handleTouchEnd}
+      onTouchEnd={(e) => { handleTouchEnd(e); handleUp(e); }}
       style={{ transform: `translateX(${swipeDx}px)`, transition: swipeDx === 0 ? 'transform 0.2s ease' : 'none' }}
       onMouseDown={handleDown} onMouseUp={handleUp}
       onClick={handleTap}>
@@ -728,8 +728,7 @@ export default function ChatWindow({ chatPartner, onBack, onVoiceCall, onVideoCa
   const [searchIdx, setSearchIdx]         = useState(0);
   const [showAttach, setShowAttach]       = useState(false);
   const [showEmoji, setShowEmoji]         = useState(false);
-  const [showSearch, setShowSearch]       = useState(false);
-  const [searchQ, setSearchQ]             = useState('');
+  // showSearch/searchQ merged into searchMode/searchQuery (single search system)
   const [isOnline, setIsOnline]           = useState(false);
   const [lastSeen, setLastSeen]           = useState(null);
   const [partnerTyping, setPartnerTyping] = useState(false);
@@ -843,8 +842,18 @@ export default function ChatWindow({ chatPartner, onBack, onVoiceCall, onVideoCa
     return unsub;
   }, [chatId, chatPartner?.id]);
 
-  // Scroll
-  useEffect(() => { bottomRef.current?.scrollIntoView({ behavior: 'smooth' }); }, [messages]);
+  // Scroll to bottom only when a new message is added (not on every update like edits/reactions)
+  const prevMsgCountRef = useRef(0);
+  useEffect(() => {
+    const newCount = messages.length;
+    if (newCount > prevMsgCountRef.current) {
+      // Only auto-scroll if user is near the bottom already
+      const container = bottomRef.current?.parentElement;
+      const nearBottom = !container || (container.scrollHeight - container.scrollTop - container.clientHeight < 200);
+      if (nearBottom) bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
+    }
+    prevMsgCountRef.current = newCount;
+  }, [messages]);
 
   // Typing handler
   const handleTextChange = val => {
@@ -866,21 +875,23 @@ export default function ChatWindow({ chatPartner, onBack, onVoiceCall, onVideoCa
     ).catch(() => {});
   };
 
-  // Send text
+  // Send text — optimistic: message appears instantly, Firestore confirms in background
   const handleSend = async () => {
     const content = text.trim();
     if (!content || !chatId) return;
     if (blocked) { toast.error(`You have blocked ${chatPartner.name}`); return; }
-    // (silently allow send even if they blocked us — they just won't see it)
-    setSending(true); setText(''); setReplyTo(null); setShowEmoji(false);
+    // Capture reply before clearing
+    const currentReply = replyTo;
+    // Clear UI immediately (optimistic)
+    setText(''); setReplyTo(null); setShowEmoji(false);
     clearTyping(chatId, user.uid, false).catch(()=>{});
+    onSoundEffect?.('send');
     try {
       await sendMessage(chatId, user.uid, content, 'text',
-        replyTo ? { replyTo: { id: replyTo.id, content: replyTo.content } } : {});
-      onSoundEffect?.('send');
+        currentReply ? { replyTo: { id: currentReply.id, content: currentReply.content } } : {},
+        profile?.name || '');
       pushToPartner(content, 'text');
-    } catch (e) { console.error('Send failed:', e); toast.error('Failed to send'); }
-    finally { setSending(false); }
+    } catch (e) { setText(content); toast.error('Failed to send — tap to retry'); }
   };
 
   // File (base64)
@@ -896,7 +907,8 @@ export default function ChatWindow({ chatPartner, onBack, onVoiceCall, onVideoCa
     try {
       const b64 = await uploadMedia(file, `chats/${chatId}/${Date.now()}_${file.name || 'media'}`);
       await sendMessage(chatId, user.uid, b64, isImage?'image':'file',
-        { fileName: file.name, fileSize: `${(file.size/1024).toFixed(1)} KB` });
+        { fileName: file.name, fileSize: `${(file.size/1024).toFixed(1)} KB` },
+        profile?.name || '');
       pushToPartner(b64, isImage ? 'image' : 'file');
       toast.dismiss(tid);
     } catch { toast.dismiss(tid); toast.error('Failed to send file'); }
@@ -926,7 +938,7 @@ export default function ChatWindow({ chatPartner, onBack, onVoiceCall, onVideoCa
     if (blocked) { toast.error(`You blocked ${chatPartner.name}. Unblock first.`); return; }
     const tid = toast.loading('Sending photo...');
     try {
-      await sendMessage(chatId, user.uid, dataUrl, 'image', { fileName: 'camera.jpg' });
+      await sendMessage(chatId, user.uid, dataUrl, 'image', { fileName: 'camera.jpg' }, profile?.name || '');
       pushToPartner(dataUrl, 'image');
       toast.dismiss(tid);
     } catch { toast.dismiss(tid); toast.error('Failed to send photo'); }
@@ -940,7 +952,7 @@ export default function ChatWindow({ chatPartner, onBack, onVoiceCall, onVideoCa
     const tid = toast.loading('Sending voice note...');
     try {
       const b64 = await uploadMedia(blob, `chats/${chatId}/${Date.now()}_voice.webm`);
-      await sendMessage(chatId, user.uid, b64, 'voice', { duration: dur });
+      await sendMessage(chatId, user.uid, b64, 'voice', { duration: dur }, profile?.name || '');
       pushToPartner(b64, 'voice');
       toast.dismiss(tid);
     } catch { toast.dismiss(tid); toast.error('Failed to send voice note'); }
@@ -1067,9 +1079,11 @@ export default function ChatWindow({ chatPartner, onBack, onVoiceCall, onVideoCa
   };
 
   // Filters
-  const visible = messages
-    .filter(m => !m.deletedFor?.includes(user.uid))
-    .filter(m => !searchQ || m.content?.toLowerCase().includes(searchQ.toLowerCase()));
+  // Memoize visible messages to avoid recomputing on every render
+  const visible = useMemo(() =>
+    messages.filter(m => !m.deletedFor?.includes(user.uid)),
+    [messages, user?.uid]
+  );
 
   // Last seen label — RTDB stores timestamps as ms numbers
   const formatLastSeen = ts => {
@@ -1205,9 +1219,6 @@ export default function ChatWindow({ chatPartner, onBack, onVoiceCall, onVideoCa
           </div>
         </div>
         <div className="flex items-center gap-1 flex-shrink-0">
-          <button onClick={() => { setShowSearch(v=>!v); setSearchQ(''); }} className="w-9 h-9 rounded-xl hover:bg-[var(--hover)] flex items-center justify-center">
-            <Search size={18} className="text-[var(--text-secondary)]"/>
-          </button>
           <button onClick={() => onVoiceCall?.(chatPartner)} className="w-9 h-9 rounded-xl hover:bg-[var(--hover)] flex items-center justify-center">
             <Phone size={18} className="text-[var(--text-secondary)]"/>
           </button>
@@ -1246,17 +1257,7 @@ export default function ChatWindow({ chatPartner, onBack, onVoiceCall, onVideoCa
         </div>
       </div>
 
-      {/* SEARCH BAR */}
-      {showSearch && (
-        <div className="px-4 py-2 bg-[var(--sidebar-bg)] border-b border-[var(--border)] flex items-center gap-2 animate-slide-down flex-shrink-0">
-          <Search size={15} className="text-[var(--text-secondary)] flex-shrink-0"/>
-          <input autoFocus value={searchQ} onChange={e => setSearchQ(e.target.value)} placeholder="Search messages..."
-            className="flex-1 bg-transparent text-[var(--text-primary)] text-sm outline-none placeholder:text-[var(--text-secondary)]"/>
-          <button onClick={() => { setShowSearch(false); setSearchQ(''); }}>
-            <X size={15} className="text-[var(--text-secondary)]"/>
-          </button>
-        </div>
-      )}
+
 
       {/* Blocked banner — only shown when YOU blocked them, never revealed to the blocked person */}
       {blocked && (
