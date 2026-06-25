@@ -5,7 +5,8 @@
 
 import { useState, useRef, useEffect } from 'react';
 import { useAuth } from '../../contexts/AuthContext';
-import { useTheme } from '../../contexts/ThemeContext';\nimport { uploadFile } from '../../firebase';
+import { useTheme } from '../../contexts/ThemeContext';
+import { uploadFile } from '../../firebase';
 import {
   User, Bell, Lock, Palette, Moon, Sun, Monitor, HelpCircle,
   LogOut, ChevronRight, Edit3, Camera, Check, ArrowLeft,
