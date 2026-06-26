@@ -197,7 +197,7 @@ export function subscribeToGroups(uid, callback) {
   return onSnapshot(q, snap => callback(snap.docs.map(d => ({ id: d.id, ...d.data() }))));
 }
 
-export async function sendGroupMessage(groupId, senderId, content, type = 'text', extra = {}, groupMembers = []) {
+export async function sendGroupMessage(groupId, senderId, content, type = 'text', extra = {}, groupMembers = [], senderName = '') {
   const msgRef = await addDoc(collection(db, 'groups', groupId, 'messages'), {
     senderId, content, type,
     timestamp: serverTimestamp(),
@@ -206,14 +206,8 @@ export async function sendGroupMessage(groupId, senderId, content, type = 'text'
     ...extra
   });
 
-  // Get sender name for lastMessage display
-  let senderName = extra.senderName || '';
-  if (!senderName) {
-    try {
-      const senderSnap = await getDoc(doc(db, 'users', senderId));
-      senderName = senderSnap.data()?.name || '';
-    } catch {}
-  }
+  // Use passed senderName — avoids extra Firestore read on every message send
+  if (!senderName) senderName = extra.senderName || '';
 
   const updates = {
     lastMessage: { content, type, senderId, senderName, timestamp: serverTimestamp(), id: msgRef.id }

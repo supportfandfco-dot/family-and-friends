@@ -2,7 +2,7 @@
 //  GroupChat — Group Conversations
 //  Family & Friends  ·  Built by Ishrit Sachdeva
 // ═══════════════════════════════════════════════════════
-import { useState, useEffect, useRef, useMemo } from 'react';
+import { useState, useEffect, useRef, useMemo, useCallback, memo } from 'react';
 import { useAuth } from '../../contexts/AuthContext';
 import { useTheme } from '../../contexts/ThemeContext';
 import {
@@ -26,6 +26,7 @@ import { VoiceRecorder, VoiceMessage } from '../Chat/VoiceNote';
 import UnifyAIOverlay from '../../ai/UnifyAIOverlay';
 import UnifyAIChatBar from '../../ai/UnifyAIChatBar';
 import UnifiedAnswerCard from '../../ai/UnifiedAnswerCard';
+import GroupVirtualList from './GroupVirtualList';
 import VoiceAI from '../../ai/VoiceAI';
 import MediaIntelligence from '../../ai/MediaIntelligence';
 import useAIStore from '../../ai/useAIStore';
@@ -392,7 +393,7 @@ function PhotoViewer({ images, startIndex, onClose, onAnalyze }) {
 }
 
 // ── Group Msg Bubble ───────────────────────────────────
-function GroupMsgBubble({ msg, isOwn, sender, isAdmin, onLongPress, onReaction, selected, selectionMode, onSelect, onImageClick }) {
+export const GroupMsgBubble = memo(function GroupMsgBubble({ msg, isOwn, sender, isAdmin, onLongPress, onReaction, selected, selectionMode, onSelect, onImageClick }) {
   const timerRef  = useRef(null);
   const isDeleted = msg.type === 'deleted';
   const isSystem  = msg.type === 'system';
@@ -488,7 +489,17 @@ function GroupMsgBubble({ msg, isOwn, sender, isAdmin, onLongPress, onReaction, 
       </div>
     </div>
   );
-}
+}, (prev, next) => {
+  return (
+    prev.msg.id        === next.msg.id &&
+    prev.msg.content   === next.msg.content &&
+    prev.msg.type      === next.msg.type &&
+    prev.msg.edited    === next.msg.edited &&
+    prev.selected      === next.selected &&
+    prev.selectionMode === next.selectionMode &&
+    JSON.stringify(prev.msg.reactions) === JSON.stringify(next.msg.reactions)
+  );
+});
 
 // ── Message Menu ───────────────────────────────────────
 function MsgMenu({ msg, isOwn, onClose, onReply, onEdit, onDeleteMe, onDeleteAll, onForward, onReact }) {
@@ -915,7 +926,7 @@ export function GroupChatWindow({ group: initialGroup, onBack, contacts: propCon
         },
       });
     } catch (e) {
-      console.error('Summarize error:', e);
+      // Silent — AI summarize errors are non-critical
       setUnifiedAnswer({ text: null, loading: false, error: 'Could not summarize. Check your GROQ_API_KEY in Cloudflare settings.', contextType: 'group-summary' });
     }
   };
@@ -947,7 +958,7 @@ export function GroupChatWindow({ group: initialGroup, onBack, contacts: propCon
       const pulse = await analyzeGroupPulse(msgsWithNames, group?.name || 'Group');
       setGroupPulse({ ...pulse, loading: false });
     } catch (e) {
-      console.error('Group pulse error:', e);
+      // Silent — AI pulse errors are non-critical
       setGroupPulse({ loading: false, error: 'Could not analyze group. Check your API key in Cloudflare settings.' });
     }
   };
@@ -1020,7 +1031,8 @@ export function GroupChatWindow({ group: initialGroup, onBack, contacts: propCon
     clearTyping(group.id, user.uid, true).catch(()=>{});
     try {
       await sendGroupMessage(group.id, user.uid, content, 'text',
-        currentReply ? { replyTo: { id: currentReply.id, content: currentReply.content } } : {}, group.members || []);
+        currentReply ? { replyTo: { id: currentReply.id, content: currentReply.content } } : {},
+        group.members || [], profile?.name || '');
       // Push to all other members
       const preview = makePreview(content, 'text');
       const senderName = profile?.name || 'Someone';
@@ -1041,7 +1053,7 @@ export function GroupChatWindow({ group: initialGroup, onBack, contacts: propCon
     const tid = toast.loading(isImage?'Sending image...':'Sending file...');
     try {
       const b64 = await uploadMedia(file, `groups/${group.id}/${Date.now()}_${file.name || 'media'}`);
-      await sendGroupMessage(group.id, user.uid, b64, isImage?'image':'file', { fileName:file.name, fileSize:`${(file.size/1024).toFixed(1)} KB` }, group.members || []);
+      await sendGroupMessage(group.id, user.uid, b64, isImage?'image':'file', { fileName:file.name, fileSize:`${(file.size/1024).toFixed(1)} KB` }, group.members || [], profile?.name || '');
       const senderName = profile?.name || 'Someone';
       const msgType = isImage ? 'image' : 'file';
       (group.members || []).filter(id => id !== user.uid).forEach(memberId => {
@@ -1074,7 +1086,7 @@ export function GroupChatWindow({ group: initialGroup, onBack, contacts: propCon
     if (!group || !dataUrl) return;
     const tid = toast.loading('Sending photo...');
     try {
-      await sendGroupMessage(group.id, user.uid, dataUrl, 'image', { fileName: 'camera.jpg' }, group.members || []);
+      await sendGroupMessage(group.id, user.uid, dataUrl, 'image', { fileName: 'camera.jpg' }, group.members || [], profile?.name || '');
       (group.members || []).filter(id => id !== user.uid).forEach(memberId => {
         sendPushNotification(memberId, `${group.name}: ${profile?.name || 'Someone'}`, '📷 Photo',
           { groupId: group.id, tag: `group-${group.id}` }).catch(() => {});
@@ -1089,7 +1101,7 @@ export function GroupChatWindow({ group: initialGroup, onBack, contacts: propCon
     const tid = toast.loading('Sending voice note...');
     try {
       const b64 = await uploadMedia(blob, `groups/${group.id}/${Date.now()}_voice.webm`);
-      await sendGroupMessage(group.id, user.uid, b64, 'voice', { duration:dur }, group.members || []);
+      await sendGroupMessage(group.id, user.uid, b64, 'voice', { duration:dur }, group.members || [], profile?.name || '');
       (group.members || []).filter(id => id !== user.uid).forEach(memberId => {
         sendPushNotification(memberId, `${group.name}: ${profile?.name || 'Someone'}`, '🎙 Voice note',
           { groupId: group.id, tag: `group-${group.id}` }).catch(() => {});
@@ -1153,11 +1165,11 @@ export function GroupChatWindow({ group: initialGroup, onBack, contacts: propCon
     setShowMenu(false);
   };
 
-  const handleReaction = (msgId, emoji) => {
+  const handleReaction = useCallback((msgId, emoji) => {
     if (!group?.id || !msgId) return;
     addReaction(group.id, msgId, user.uid, emoji, true)
-      .catch(err => { console.error('Reaction error:', err); toast.error('Could not add reaction'); });
-  };
+      .catch(() => { toast.error('Could not add reaction'); });
+  }, [group?.id, user?.uid]);
 
   const handleForward = async targets => {
     const msgs = forwardMsgs?.length ? forwardMsgs : (selectedMsg ? [selectedMsg] : []);
@@ -1170,7 +1182,7 @@ export function GroupChatWindow({ group: initialGroup, onBack, contacts: propCon
       await Promise.all(msgs.map(msg => forwardMessage(msg, targets, user.uid)));
       toast.success(`Forwarded to ${targets.length} chat${targets.length > 1 ? 's' : ''}!`, { id: tid });
     } catch (e) {
-      console.error('Forward failed:', e);
+      // Silent — forward error shown to user via toast
       toast.error('Failed to forward', { id: tid });
     }
   };
@@ -1299,30 +1311,23 @@ export function GroupChatWindow({ group: initialGroup, onBack, contacts: propCon
         </div>
       )}
 
-      {/* MESSAGES */}
-      <div className="flex-1 overflow-y-auto px-4 py-3" style={{scrollbarWidth:'thin'}}>
-        {visible.map(msg => (
-          <GroupMsgBubble key={msg.id} msg={msg}
-            isOwn={msg.senderId===user.uid}
-            sender={memberProfiles[msg.senderId]}
-            isAdmin={msg.senderId===group.adminId}
-            selected={selectedMsgs.some(m=>m.id===msg.id)}
-            selectionMode={selectionMode}
-            onSelect={selectionMode ? toggleMsgSelect : enterSelectionMode}
-            onLongPress={msg => { if(!selectionMode) setSelectedMsg(msg); else enterSelectionMode(msg); }}
-            onReaction={handleReaction}
-            onImageClick={handleImageClick}/>
-        ))}
-        {typingLabel && (
-          <div className="flex justify-start mb-1 animate-fade-in">
-            <div className="bg-[var(--input-bg)] rounded-2xl rounded-bl-sm px-4 py-2 flex items-center gap-2">
-              <div className="flex gap-1">{[0,1,2].map(i=><div key={i} className="w-2 h-2 rounded-full bg-brand-400" style={{animation:`bounce 1s infinite ${i*0.15}s`}}/>)}</div>
-              <span className="text-xs text-[var(--text-secondary)]">{typingLabel}</span>
-            </div>
-          </div>
-        )}
-        <div ref={bottomRef}/>
-      </div>
+      {/* MESSAGES — virtualized */}
+      <GroupVirtualList
+        messages={visible}
+        user={user}
+        group={group}
+        memberProfiles={memberProfiles}
+        selectedMsgs={selectedMsgs}
+        selectionMode={selectionMode}
+        typingLabel={typingLabel}
+        bottomRef={bottomRef}
+        onLongPress={msg => { if(!selectionMode) setSelectedMsg(msg); else enterSelectionMode(msg); }}
+        onReaction={handleReaction}
+        onSelect={selectionMode ? toggleMsgSelect : enterSelectionMode}
+        onImageClick={handleImageClick}
+        enterSelectionMode={enterSelectionMode}
+        toggleMsgSelect={toggleMsgSelect}
+      />
 
       {/* UNIFYAI — Summary / Answer Card */}
       {unifiedAnswer && (

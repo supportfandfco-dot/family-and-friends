@@ -344,7 +344,7 @@ async function handleMessage({ uid, profile, chatId, chat, lastMsg, mode }) {
       await sendMessage(chatId, uid, res.reply, 'text', {
         isAgentMsg: true,
         agentReason: res.reply_reason || category,
-      });
+      }, profile?.name || '');
       await addDoc(collection(db, 'users', uid, 'agentLogs'), { ...logEntry, status: 'auto_sent' });
       toast(`🤖 Agent replied to ${senderName}`, { duration: 3000 });
     } else {

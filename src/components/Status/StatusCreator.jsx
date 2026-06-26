@@ -134,7 +134,7 @@ export default function StatusCreator({ onClose, onPosted }) {
       await addDoc(collection(db, 'statuses'), data);
       toast.success('Moment posted! 🎉');
       onPosted?.(); onClose();
-    } catch (err) { toast.error('Failed to post'); console.error(err); }
+    } catch { toast.error('Failed to post'); }
     finally { setPosting(false); }
   };
 

@@ -146,7 +146,7 @@ export default function CommandCenter({ chats, groups, user, onSelectChat, onSel
       (err) => {
         // Permission error or network error — unblock UI with empty data
         clearTimeout(timeout);
-        console.warn('[CommandCenter] Firestore error:', err.code, err.message);
+        // Firestore error (permission/network) — UI unblocked with empty data
         setCcData({});
         setCcLoading(false);
       }
@@ -171,13 +171,11 @@ export default function CommandCenter({ chats, groups, user, onSelectChat, onSel
     setWaitingForMe(buildWaitingForMe(chats, groups, uid));
   }, [chats, groups, uid, lastSeenMs]);
 
-  // ── unread count (from props, real-time) ──────────────────────
-  const unreadCount = [...(chats || []), ...(groups || [])]
-    .reduce((acc, c) => acc + (c.unread?.[uid] || 0), 0);
-
-  // ── unanswered questions from ccData.waitingFor ───────────────
-  // These are set by useIntelligenceEngine when it detects a
-  // question was asked and user never replied
+  // ── unread count and unanswered Qs — memoized ──────────────────
+  const unreadCount = React.useMemo(
+    () => [...(chats || []), ...(groups || [])].reduce((acc, c) => acc + (c.unread?.[uid] || 0), 0),
+    [chats, groups, uid]
+  );
   const unansweredQs = ccData?.waitingFor || [];
 
   // ── navigation helper — resolves partner profile before navigating ──

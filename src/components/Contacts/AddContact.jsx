@@ -63,7 +63,7 @@ export default function AddContact({ onClose, onContactAdded }) {
       toast.success(`${contact.name} added to contacts!`);
       if (onContactAdded) onContactAdded(contact);
     } catch (e) {
-      console.error(e);
+      // Silent — toast already shown
       toast.error('Failed to add contact');
     }
   };

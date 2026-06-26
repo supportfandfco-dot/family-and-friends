@@ -2,7 +2,7 @@
 //  VoiceNote — Record & Playback Voice Messages
 //  Family & Friends  ·  Built by Ishrit Sachdeva
 // ═══════════════════════════════════════════════════════
-import { useState, useRef, useEffect } from 'react';
+import { useState, useRef, useEffect, memo } from 'react';
 import { Square, Play, Pause, Trash2, Send } from 'lucide-react';
 
 const fmt = s => {
@@ -274,7 +274,7 @@ export function VoiceRecorder({ onSend, onCancel }) {
 // ══════════════════════════════════════════════════════
 //  VoiceMessage — Playback bubble (for received messages)
 // ══════════════════════════════════════════════════════
-export function VoiceMessage({ url, duration, isOwn }) {
+export const VoiceMessage = memo(function VoiceMessage({ url, duration, isOwn }) {
   const [playing, setPlaying]   = useState(false);
   const [progress, setProgress] = useState(0);
   const [current, setCurrent]   = useState(0);
@@ -342,7 +342,7 @@ export function VoiceMessage({ url, duration, isOwn }) {
           if (audioRef.current) audioRef.current.currentTime = 0;
         }}
         onError={(e) => {
-          console.warn('VoiceMessage audio error:', e);
+          // Audio error — UI shows error state
           setErrored(true);
         }}
       />
@@ -363,17 +363,23 @@ export function VoiceMessage({ url, duration, isOwn }) {
           }}>
           {bars.map((h, i) => {
             const isFilled = i < filled;
-            const isActive = playing && Math.abs(i - filled) <= 2;
-            const animatedH = isActive ? h * (1 + 0.4 * Math.sin(Date.now() / 150 + i)) : h;
+            // GPU-accelerated CSS animation only — no per-render Math.sin
             return (
-              <div key={i} className="rounded-full flex-shrink-0 transition-all duration-75" style={{
-                width: '2.5px',
-                height: `${Math.max(3, isActive ? animatedH : h)}px`,
-                background: isFilled
-                  ? (isOwn ? 'rgba(255,255,255,0.9)' : '#16a34a')
-                  : (isOwn ? 'rgba(255,255,255,0.3)' : 'rgba(22,163,74,0.3)'),
-                animation: isActive ? `voice-pulse ${0.3 + i * 0.05}s ease-in-out infinite alternate` : 'none',
-              }}/>
+              <div
+                key={i}
+                className="rounded-full flex-shrink-0"
+                style={{
+                  width: '2.5px',
+                  height: `${Math.max(3, h)}px`,
+                  background: isFilled
+                    ? (isOwn ? 'rgba(255,255,255,0.9)' : '#16a34a')
+                    : (isOwn ? 'rgba(255,255,255,0.3)' : 'rgba(22,163,74,0.3)'),
+                  // CSS animation only when playing — zero JS cost when idle
+                  animation: playing ? `voice-pulse ${0.25 + (i % 5) * 0.07}s ease-in-out infinite alternate` : 'none',
+                  transformOrigin: 'center',
+                  willChange: playing ? 'transform' : 'auto',
+                }}
+              />
             );
           })}
         </div>
@@ -383,4 +389,4 @@ export function VoiceMessage({ url, duration, isOwn }) {
       </div>
     </div>
   );
-}
+});

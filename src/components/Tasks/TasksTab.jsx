@@ -20,8 +20,8 @@ export default function TasksTab({ chats, groups, user, onSelectChat, onSelectGr
   const [selectedTask, setSelectedTask] = useState(null);
 
   useEffect(() => {
-    if (!auth.currentUser) return;
-    const unsub = subscribeToFFTasks(auth.currentUser.uid, (data) => {
+    if (!user?.uid) return;
+    const unsub = subscribeToFFTasks(user.uid, (data) => {
       setTasks(data);
     });
     return () => unsub();
@@ -40,7 +40,7 @@ export default function TasksTab({ chats, groups, user, onSelectChat, onSelectGr
             setAiSuggestions(insights.tasks);
           }
         } catch (err) {
-          console.error("AI Insights Error:", err);
+          // Silent — AI insights are non-critical
         } finally {
           setLoadingAi(false);
         }
@@ -88,7 +88,7 @@ export default function TasksTab({ chats, groups, user, onSelectChat, onSelectGr
       if (!listRes.ok) {
         let errJson = {};
         try { errJson = await listRes.json(); } catch(e){}
-        console.error("Google API Error:", errJson);
+        // Google Calendar API error — handled above
         throw new Error(`Google API Error: ${errJson.error?.message || listRes.statusText}`);
       }
       const listData = await listRes.json();
@@ -114,7 +114,7 @@ export default function TasksTab({ chats, groups, user, onSelectChat, onSelectGr
       
       toast.success('Added to Google Tasks');
     } catch (err) {
-      console.error(err);
+      // Silent — task sync error
       toast.error('Failed to sync to Google Tasks');
     }
   };

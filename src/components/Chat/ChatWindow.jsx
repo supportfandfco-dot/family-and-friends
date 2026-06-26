@@ -32,6 +32,9 @@ import MediaIntelligence from '../../ai/MediaIntelligence';
 import useAIStore from '../../ai/useAIStore';
 import { summarizeMessages, askUnify } from '../../ai/unifyService';
 import MediaGallery from './MediaGallery';
+import VirtualMessageList from './VirtualMessageList';
+import MessageBubble from './MessageBubble';
+import useMessageSearch from '../../hooks/useMessageSearch';
 
 // ── Emoji data ─────────────────────────────────────────
 const EMOJI_CATEGORIES = {
@@ -379,190 +382,6 @@ function PhotoViewer({ images, startIndex, onClose, onAnalyze }) {
   );
 }
 
-function MessageBubble({ msg, isOwn, onLongPress, onReaction, selected, selectionMode, onSelect, onImageClick, onSwipeReply }) {
-  // ── Chat appearance settings — read directly in this component's
-  //    own scope, since MessageBubble is a separate function from
-  //    ChatWindow and cannot see ChatWindow's local variables ──────
-  const chatAppearance = (() => {
-    try { return JSON.parse(localStorage.getItem('ff_chat_settings')) || {}; } catch { return {}; }
-  })();
-  const getBubbleRadius = (own) => {
-    const shape = chatAppearance.bubbleShape || 'classic';
-    if (shape === 'pill')      return '999px';
-    if (shape === 'ios')       return '22px';
-    if (shape === 'brutalist') return '4px';
-    // classic WA: sender tail bottom-right, receiver tail bottom-left
-    return own ? '18px 18px 4px 18px' : '18px 18px 18px 4px';
-  };
-  const chatFontSize = (() => {
-    const sz = chatAppearance.fontSize || chatAppearance.fontSizeId || 'medium';
-    return { small: 12, medium: 15, large: 17, xl: 20 }[sz] || 15;
-  })();
-
-  // ── Swipe-to-reply ───────────────────────────────────
-  const swipeRef = useRef(null);
-  const touchStartX = useRef(0);
-  const [swipeDx, setSwipeDx] = useState(0);
-
-  const handleTouchStart = (e) => {
-    touchStartX.current = e.touches[0].clientX;
-  };
-  const handleTouchMove = (e) => {
-    const dx = e.touches[0].clientX - touchStartX.current;
-    // Only allow swipe in the right direction (right for received, left for sent)
-    const maxSwipe = 60;
-    if (isOwn && dx < 0) setSwipeDx(Math.max(dx, -maxSwipe));
-    else if (!isOwn && dx > 0) setSwipeDx(Math.min(dx, maxSwipe));
-  };
-  const handleTouchEnd = () => {
-    if (Math.abs(swipeDx) >= 50) onSwipeReply?.(msg);
-    setSwipeDx(0);
-  };
-  const longPressRef = useRef(null);
-  const [showReactions, setShowReactions] = useState(false);
-  const isDeleted   = msg.type === 'deleted';
-  const isSystem    = msg.type === 'system';
-  const hasReactions = msg.reactions && Object.keys(msg.reactions).some(e => msg.reactions[e]?.length > 0);
-
-  const ts = msg.timestamp?.toDate
-    ? msg.timestamp.toDate().toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'})
-    : '';
-
-  const handleDown = () => {
-    longPressRef.current = setTimeout(() => {
-      if (selectionMode) { onSelect(msg); return; }
-      setShowReactions(true);
-      setTimeout(() => setShowReactions(false), 3000);
-      onLongPress(msg);
-    }, 480);
-  };
-  const handleUp = () => clearTimeout(longPressRef.current);
-  const handleTap = () => {
-    if (selectionMode) { onSelect(msg); return; }
-  };
-
-  // System message
-  if (isSystem) return (
-    <div className="flex justify-center my-2 animate-fade-in">
-      <span className="text-[11px] text-[var(--text-secondary)] bg-[var(--input-bg)] px-3 py-1 rounded-full opacity-70">
-        {msg.content}
-      </span>
-    </div>
-  );
-
-  return (
-    <div
-      className={`flex mb-1 animate-fade-in relative ${isOwn?'justify-end':'justify-start'}`}
-      onTouchStart={(e) => { handleTouchStart(e); handleDown(e); }}
-      onTouchMove={handleTouchMove}
-      onTouchEnd={(e) => { handleTouchEnd(e); handleUp(e); }}
-      style={{ transform: `translateX(${swipeDx}px)`, transition: swipeDx === 0 ? 'transform 0.2s ease' : 'none' }}
-      onMouseDown={handleDown} onMouseUp={handleUp}
-      onClick={handleTap}>
-      {/* Selection indicator */}
-      {selectionMode && (
-        <div className={`absolute left-0 top-1/2 -translate-y-1/2 w-5 h-5 rounded-full border-2 flex items-center justify-center transition-all z-10 ${
-          selected ? 'bg-brand-500 border-brand-500' : 'border-[var(--border)] bg-[var(--input-bg)]'
-        }`} style={{left: isOwn ? 'auto' : '-24px', right: isOwn ? '-24px' : 'auto'}}>
-          {selected && <Check size={12} className="text-white"/>}
-        </div>
-      )}
-      <div className={`max-w-[78%] flex flex-col ${isOwn?'items-end':'items-start'} relative`}>
-        {/* Forwarded label */}
-        {msg.forwarded && !isDeleted && (
-          <div className="flex items-center gap-1 text-[10px] text-[var(--text-secondary)] mb-0.5 px-1">
-            <Share2 size={9}/> Forwarded
-          </div>
-        )}
-        {/* AI Agent label */}
-        {msg.isAgentMsg && !isDeleted && (
-          <div className="flex items-center gap-1 text-[10px] text-brand-500 mb-0.5 px-1 font-semibold">
-            <span>🤖</span> Sent by AI Agent
-          </div>
-        )}
-        {/* Reply preview */}
-        {msg.replyTo && !isDeleted && (
-          <div className={`text-xs px-2.5 py-1.5 rounded-t-xl mb-0.5 max-w-full border-l-[3px] border-brand-400 ${isOwn?'bg-brand-600/30':'bg-black/5 dark:bg-white/5'}`}>
-            <p className="text-brand-400 font-semibold text-[10px] mb-0.5">Reply</p>
-            <p className="truncate opacity-80 max-w-[200px]">{msg.replyTo.content?.slice(0,60)||'📎 Media'}</p>
-          </div>
-        )}
-        {/* Bubble */}
-        <div className={`px-3 py-2 text-sm break-words shadow-sm ${
-          isDeleted
-            ? 'italic opacity-40 bg-[var(--input-bg)] text-[var(--text-secondary)]'
-            : isOwn
-              ? 'bg-brand-500 text-white'
-              : 'bg-[var(--input-bg)] text-[var(--text-primary)]'
-        } ${selected ? 'ring-2 ring-brand-400' : ''}`}
-          style={{
-            borderRadius: getBubbleRadius(isOwn),
-            fontSize: chatFontSize,
-          }}>
-          {isDeleted ? (
-            <span className="flex items-center gap-1.5"><Trash2 size={12}/> This message was deleted</span>
-          ) : msg.type === 'image' ? (
-            <div className="relative group cursor-pointer" onClick={e => { e.stopPropagation(); onImageClick?.(msg); }}>
-              <img src={msg.content} alt="img" className="rounded-xl max-w-[220px] block" style={{maxHeight:220,objectFit:'cover'}}/>
-              <div className="absolute inset-0 rounded-xl bg-black/0 group-hover:bg-black/15 transition-all flex items-center justify-center">
-                <ZoomIn size={22} className="text-white opacity-0 group-hover:opacity-100 drop-shadow-lg transition-all scale-75 group-hover:scale-100"/>
-              </div>
-            </div>
-          ) : msg.type === 'voice' ? (
-            <VoiceMessage url={msg.content} duration={msg.duration} isOwn={isOwn}/>
-          ) : msg.type === 'file' ? (
-            <a href={msg.content} download={msg.fileName} className="flex items-center gap-2 hover:opacity-80">
-              <div className="w-9 h-9 rounded-xl bg-white/20 flex items-center justify-center flex-shrink-0">
-                <FileText size={16}/>
-              </div>
-              <div className="min-w-0">
-                <p className="text-xs font-medium truncate max-w-[140px]">{msg.fileName||'File'}</p>
-                <p className="text-[10px] opacity-60">{msg.fileSize}</p>
-              </div>
-            </a>
-          ) : (
-            <span style={{whiteSpace:'pre-wrap', wordBreak:'break-word', overflowWrap:'anywhere'}}>{msg.content}</span>
-          )}
-          {msg.edited && !isDeleted && <span className="text-[10px] opacity-40 ml-1">· edited</span>}
-          {/* Timestamp + ticks */}
-          {!isDeleted && (
-            <div className={`flex items-center gap-1 mt-0.5 ${isOwn?'justify-end':'justify-start'}`}>
-              <span className="text-[10px]" style={{opacity:0.55}}>{ts}</span>
-              {isOwn && (() => {
-                // Respect partner's read receipts privacy setting
-                const partnerReadReceipts = chatPartner?.privacy?.readReceipts !== false;
-                // If partner disabled read receipts, cap status at 'delivered' visually
-                const displayStatus = (!partnerReadReceipts && msg.status === 'seen') ? 'delivered' : msg.status;
-                return (
-                  <span className="flex-shrink-0 flex items-center" title={displayStatus}>
-                    {displayStatus === 'seen'
-                      ? <CheckCheck size={16} strokeWidth={2.5} style={{color:'#34d8ff', filter:'drop-shadow(0 0 2px #34d8ff55)'}}/>
-                      : displayStatus === 'delivered'
-                        ? <CheckCheck size={16} strokeWidth={2.5} style={{color:'rgba(255,255,255,0.95)'}}/>
-                        : <Check size={15} strokeWidth={2.5} style={{color:'rgba(255,255,255,0.75)'}}/>
-                    }
-                  </span>
-                );
-              })()}
-            </div>
-          )}
-        </div>
-        {/* Reactions display */}
-        {hasReactions && (
-          <div className={`flex flex-wrap gap-1 mt-0.5 px-1 ${isOwn?'justify-end':'justify-start'}`}>
-            {Object.entries(msg.reactions).filter(([,v]) => v?.length > 0).map(([emoji, uids]) => (
-              <button key={emoji} onClick={() => onReaction(msg.id, emoji)}
-                className="flex items-center gap-0.5 bg-[var(--input-bg)] border border-[var(--border)] rounded-full px-1.5 py-0.5 text-xs hover:bg-[var(--hover)] transition-all">
-                <span>{emoji}</span>
-                {uids.length > 1 && <span className="text-[10px] text-[var(--text-secondary)]">{uids.length}</span>}
-              </button>
-            ))}
-          </div>
-        )}
-      </div>
-    </div>
-  );
-}
 
 // ── Message Context Menu ───────────────────────────────
 function MsgMenu({ msg, isOwn, onClose, onReply, onEdit, onDeleteMe, onDeleteAll, onForward, onReact }) {
@@ -723,9 +542,7 @@ export default function ChatWindow({ chatPartner, onBack, onVoiceCall, onVideoCa
       });
     });
   const [replyTo, setReplyTo]             = useState(null);
-  const [searchMode, setSearchMode]       = useState(false);
-  const [searchQuery, setSearchQuery]     = useState('');
-  const [searchIdx, setSearchIdx]         = useState(0);
+  // Search — managed by useMessageSearch hook (indexed, debounced)
   const [showAttach, setShowAttach]       = useState(false);
   const [showEmoji, setShowEmoji]         = useState(false);
   // showSearch/searchQ merged into searchMode/searchQuery (single search system)
@@ -768,7 +585,6 @@ export default function ChatWindow({ chatPartner, onBack, onVoiceCall, onVideoCa
   const [mediaAIImage, setMediaAIImage]     = useState(null);
   const [summaryLoading, setSummaryLoading] = useState(false);
 
-  const bottomRef   = useRef(null);
   const inputRef    = useRef(null);
   const typingTimer = useRef(null);
 
@@ -842,30 +658,19 @@ export default function ChatWindow({ chatPartner, onBack, onVoiceCall, onVideoCa
     return unsub;
   }, [chatId, chatPartner?.id]);
 
-  // Scroll to bottom only when a new message is added (not on every update like edits/reactions)
-  const prevMsgCountRef = useRef(0);
-  useEffect(() => {
-    const newCount = messages.length;
-    if (newCount > prevMsgCountRef.current) {
-      // Only auto-scroll if user is near the bottom already
-      const container = bottomRef.current?.parentElement;
-      const nearBottom = !container || (container.scrollHeight - container.scrollTop - container.clientHeight < 200);
-      if (nearBottom) bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
-    }
-    prevMsgCountRef.current = newCount;
-  }, [messages]);
+  // Scroll managed by VirtualMessageList
 
   // Typing handler
-  const handleTextChange = val => {
+  const handleTextChange = useCallback(val => {
     setText(val);
     if (!chatId) return;
     setTyping(chatId, user.uid, false).catch(()=>{});
     clearTimeout(typingTimer.current);
     typingTimer.current = setTimeout(() => clearTyping(chatId, user.uid, false).catch(()=>{}), 2500);
-  };
+  }, [chatId, user?.uid]);
 
   // ── Push notification helper ──────────────────────────
-  const pushToPartner = (content, type) => {
+  const pushToPartner = useCallback((content, type) => {
     if (!chatPartner?.id || !profile?.name) return;
     sendPushNotification(
       chatPartner.id,
@@ -873,7 +678,7 @@ export default function ChatWindow({ chatPartner, onBack, onVoiceCall, onVideoCa
       makePreview(content, type),
       { chatId, tag: `chat-${chatId}` }
     ).catch(() => {});
-  };
+  }, [chatPartner?.id, profile?.name, chatId]);
 
   // Send text — optimistic: message appears instantly, Firestore confirms in background
   const handleSend = async () => {
@@ -1030,15 +835,11 @@ export default function ChatWindow({ chatPartner, onBack, onVoiceCall, onVideoCa
   };
 
   // Reaction
-  const handleReaction = (msgId, emoji) => {
+  const handleReaction = useCallback((msgId, emoji) => {
     if (!chatId || !msgId) return;
     addReaction(chatId, msgId, user.uid, emoji, false)
-      .then(() => {})
-      .catch(err => {
-        console.error('Reaction error:', err);
-        toast.error('Could not add reaction');
-      });
-  };
+      .catch(() => toast.error('Could not add reaction'));
+  }, [chatId, user?.uid]);
 
   // Forward
   const handleForward = async (targets) => {
@@ -1056,7 +857,7 @@ export default function ChatWindow({ chatPartner, onBack, onVoiceCall, onVideoCa
         { id: tid }
       );
     } catch (e) {
-      console.error('Forward failed:', e);
+      // Forward error — toast shown below
       toast.error('Failed to forward', { id: tid });
     }
   };
@@ -1067,10 +868,10 @@ export default function ChatWindow({ chatPartner, onBack, onVoiceCall, onVideoCa
     setSelectedMsgs([msg]);
     setSelectedMsg(null);
   };
-  const exitSelectionMode = () => {
+  const exitSelectionMode = useCallback(() => {
     setSelectionMode(false);
     setSelectedMsgs([]);
-  };
+  }, []);
   const toggleMsgSelect = (msg) => {
     setSelectedMsgs(prev => {
       const exists = prev.find(m => m.id === msg.id);
@@ -1084,6 +885,21 @@ export default function ChatWindow({ chatPartner, onBack, onVoiceCall, onVideoCa
     messages.filter(m => !m.deletedFor?.includes(user.uid)),
     [messages, user?.uid]
   );
+
+  // Indexed, debounced search engine
+  const {
+    searchActive: searchMode,
+    searchQuery,
+    matchIds: searchMatchIds,
+    totalResults: searchTotal,
+    resultIdx: searchIdx,
+    currentMsg: searchCurrentMsg,
+    handleQueryChange: handleSearchChange,
+    openSearch,
+    closeSearch,
+    prevResult: searchPrev,
+    nextResult: searchNext,
+  } = useMessageSearch(visible);
 
   // Last seen label — RTDB stores timestamps as ms numbers
   const formatLastSeen = ts => {
@@ -1113,13 +929,9 @@ export default function ChatWindow({ chatPartner, onBack, onVoiceCall, onVideoCa
     return isOnline ? 'online' : formatLastSeen(lastSeen);
   })();
   const isBlocking = blocked; // only disable UI when I blocked them
-  // ── Message search ──────────────────────────────────────────
-  const searchResults = searchQuery.trim().length > 1
-    ? messages.filter(m => (m.content || '').toLowerCase().includes(searchQuery.toLowerCase()))
-    : [];
-  const searchCurrentMsg = searchResults[searchIdx] || null;
+  // Search handled by useMessageSearch hook
 
-  const closeAll = () => { setShowMenu(false); setShowAttach(false); setShowEmoji(false); };
+  const closeAll = useCallback(() => { setShowMenu(false); setShowAttach(false); setShowEmoji(false); }, []);
 
   // ── UnifyAI helpers ────────────────────────────────────────
   const getAIContext = () => ({
@@ -1225,7 +1037,7 @@ export default function ChatWindow({ chatPartner, onBack, onVoiceCall, onVideoCa
           <button onClick={() => onVideoCall?.(chatPartner)} className="w-9 h-9 rounded-xl hover:bg-[var(--hover)] flex items-center justify-center">
             <Video size={18} className="text-[var(--text-secondary)]"/>
           </button>
-          <button onClick={() => { setSearchMode(v => !v); setSearchQuery(''); setSearchIdx(0); }}
+          <button onClick={() => { searchMode ? closeSearch() : openSearch(); }}
             className={`w-9 h-9 rounded-xl flex items-center justify-center transition-all ${searchMode ? 'bg-brand-500/15' : 'hover:bg-[var(--hover)]'}`}>
             <Search size={17} className={searchMode ? 'text-brand-500' : 'text-[var(--text-secondary)]'}/>
           </button>
@@ -1277,68 +1089,51 @@ export default function ChatWindow({ chatPartner, onBack, onVoiceCall, onVideoCa
           <Search size={15} className="text-[var(--text-secondary)] flex-shrink-0"/>
           <input
             autoFocus
-            value={searchQuery}
-            onChange={e => { setSearchQuery(e.target.value); setSearchIdx(0); }}
+            onChange={e => handleSearchChange(e.target.value)}
             placeholder="Search in conversation…"
             className="flex-1 bg-transparent text-sm text-[var(--text-primary)] placeholder:text-[var(--text-secondary)] outline-none"
           />
-          {searchResults.length > 0 && (
+          {searchTotal > 0 && (
             <div className="flex items-center gap-1 flex-shrink-0">
-              <span className="text-xs text-[var(--text-secondary)]">{searchIdx + 1}/{searchResults.length}</span>
-              <button onClick={() => setSearchIdx(i => (i - 1 + searchResults.length) % searchResults.length)}
+              <span className="text-xs text-[var(--text-secondary)]">{searchIdx + 1}/{searchTotal}</span>
+              <button onClick={searchPrev}
                 className="w-7 h-7 rounded-lg hover:bg-[var(--hover)] flex items-center justify-center">
                 <ChevronLeft size={15} className="text-[var(--text-secondary)]"/>
               </button>
-              <button onClick={() => setSearchIdx(i => (i + 1) % searchResults.length)}
+              <button onClick={searchNext}
                 className="w-7 h-7 rounded-lg hover:bg-[var(--hover)] flex items-center justify-center">
                 <ChevronRight size={15} className="text-[var(--text-secondary)]"/>
               </button>
             </div>
           )}
-          {searchQuery && searchResults.length === 0 && (
+          {searchQuery && searchTotal === 0 && (
             <span className="text-xs text-[var(--text-secondary)] flex-shrink-0">No results</span>
           )}
-          <button onClick={() => { setSearchMode(false); setSearchQuery(''); }}
+          <button onClick={closeSearch}
             className="w-7 h-7 rounded-lg hover:bg-[var(--hover)] flex items-center justify-center flex-shrink-0">
             <X size={14} className="text-[var(--text-secondary)]"/>
           </button>
         </div>
       )}
 
-      <div className="flex-1 overflow-y-auto px-4 py-3" style={{scrollbarWidth:'thin'}}>
-        {visible.map((msg, _i) => {
-          const isSearchMatch = searchMode && searchQuery.trim().length > 1
-            && (msg.content || '').toLowerCase().includes(searchQuery.toLowerCase());
-          const isCurrentResult = searchCurrentMsg?.id === msg.id;
-          return (
-            <div key={msg.id}
-              ref={isCurrentResult ? el => el?.scrollIntoView({ behavior: 'smooth', block: 'center' }) : null}
-              className={isCurrentResult ? 'ring-2 ring-brand-400 ring-offset-2 ring-offset-[var(--chat-bg)] rounded-2xl transition-all' : ''}>
-              <MessageBubble
-                msg={msg}
-                isOwn={msg.senderId === user.uid}
-                selected={selectedMsgs.some(m => m.id === msg.id)}
-                selectionMode={selectionMode}
-                onSelect={selectionMode ? toggleMsgSelect : enterSelectionMode}
-                onLongPress={msg => {
-                  if (!selectionMode) { setSelectedMsg(msg); }
-                  else enterSelectionMode(msg);
-                }}
-                onReaction={handleReaction}
-                onSwipeReply={(m) => { setEditingMsg(null); setEditText(''); setReplyTo(m); }}
-                onImageClick={handleImageClick}/>
-            </div>
-          );
-        })}
-        {partnerTyping && (
-          <div className="flex justify-start mb-1 animate-fade-in">
-            <div className="bg-[var(--input-bg)] rounded-2xl rounded-bl-sm px-4 py-3 flex items-center gap-1.5">
-              {[0,1,2].map(i => <div key={i} className="w-2 h-2 rounded-full bg-brand-400" style={{animation:`bounce 1s infinite ${i*0.15}s`}}/>)}
-            </div>
-          </div>
-        )}
-        <div ref={bottomRef}/>
-      </div>
+      <VirtualMessageList
+        messages={visible}
+        user={user}
+        chatPartner={chatPartner}
+        selectedMsgs={selectedMsgs}
+        selectionMode={selectionMode}
+        searchMode={searchMode}
+        searchQuery={searchQuery}
+        searchCurrentMsg={searchCurrentMsg}
+        partnerTyping={partnerTyping}
+        onLongPress={msg => { if (!selectionMode) setSelectedMsg(msg); else enterSelectionMode(msg); }}
+        onReaction={handleReaction}
+        onSelect={selectionMode ? toggleMsgSelect : enterSelectionMode}
+        onImageClick={handleImageClick}
+        onSwipeReply={(m) => { setEditingMsg(null); setEditText(''); setReplyTo(m); }}
+        enterSelectionMode={enterSelectionMode}
+        toggleMsgSelect={toggleMsgSelect}
+      />
 
       {/* UNIFY AI — Summary Answer Card */}
       {unifiedAnswer && (
