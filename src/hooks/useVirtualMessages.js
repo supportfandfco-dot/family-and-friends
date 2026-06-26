@@ -44,13 +44,21 @@ export default function useVirtualMessages(messages, containerRef) {
   const heightCache                 = useRef(new Map()); // id → measured height
   const rafRef                      = useRef(null);
 
-  // Build flat list with date separators injected
+  // Build flat list with date separators + optional unread divider
   const rows = useMemo(() => {
     const result = [];
+    // Find first unread message index (status !== 'seen' from partner, i.e. sent by us but not read)
+    // We look for the transition point only — inject divider once
+    let unreadDividerPlaced = false;
     messages.forEach((msg, i) => {
-      // Inject date separator before first message of each day
       if (i === 0 || !isSameDay(messages[i - 1], msg)) {
         result.push({ type: 'date', id: `date-${msg.id}`, label: getDateLabel(msg) });
+      }
+      // Unread divider: inject before first message that is 'sent'/'delivered' (not yet seen)
+      // Only show when scrolling up to find unread content
+      if (!unreadDividerPlaced && i > 0 && msg.isFirstUnread) {
+        result.push({ type: 'unread', id: `unread-divider` });
+        unreadDividerPlaced = true;
       }
       result.push({ type: 'msg', id: msg.id, msg });
     });

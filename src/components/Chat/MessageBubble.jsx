@@ -2,7 +2,7 @@
 //  MessageBubble — Isolated, memoized message component
 //  Never rerenders unless its own data changes.
 // ═══════════════════════════════════════════════════════
-import { useState, useRef, memo } from 'react';
+import { useState, useRef, useEffect, memo } from 'react';
 import { Check, CheckCheck, Trash2, Share2, Edit3, FileText, ZoomIn } from 'lucide-react';
 import { VoiceMessage } from './VoiceNote';
 
@@ -36,33 +36,23 @@ function getTimestamp(msg) {
 function LazyImage({ src, alt, onClick }) {
   const [loaded, setLoaded] = useState(false);
   const [inView, setInView] = useState(false);
-  const ref = useRef(null);
+  const nodeRef = useRef(null);
 
-  // IntersectionObserver for lazy loading
-  useRef(() => {
-    if (!ref.current) return;
-    const io = new IntersectionObserver(
-      ([e]) => { if (e.isIntersecting) { setInView(true); io.disconnect(); } },
-      { rootMargin: '200px' }
-    );
-    io.observe(ref.current);
-    return () => io.disconnect();
-  });
-
-  // Use useEffect via a small trick — we can't call hooks inside useRef cb
-  // Instead use a ref callback pattern
-  const refCallback = (node) => {
+  // useEffect with proper cleanup — no leaked observers
+  useEffect(() => {
+    const node = nodeRef.current;
     if (!node) return;
     const io = new IntersectionObserver(
       ([e]) => { if (e.isIntersecting) { setInView(true); io.disconnect(); } },
       { rootMargin: '300px' }
     );
     io.observe(node);
-  };
+    return () => io.disconnect();
+  }, []);
 
   return (
     <div
-      ref={refCallback}
+      ref={nodeRef}
       className="relative group cursor-pointer"
       onClick={onClick}
       style={{ minHeight: loaded ? 'auto' : '120px', minWidth: '120px' }}
@@ -91,8 +81,8 @@ function LazyImage({ src, alt, onClick }) {
         />
       )}
       {loaded && (
-        <div className="absolute inset-0 rounded-xl bg-black/0 group-hover:bg-black/15 transition-all flex items-center justify-center">
-          <ZoomIn size={22} className="text-white opacity-0 group-hover:opacity-100 drop-shadow-lg transition-all scale-75 group-hover:scale-100" />
+        <div className="absolute inset-0 rounded-xl bg-black/0 group-hover:bg-black/15 transition-opacity flex items-center justify-center">
+          <ZoomIn size={22} className="text-white opacity-0 group-hover:opacity-100 drop-shadow-lg transition-[opacity,transform] scale-75 group-hover:scale-100" />
         </div>
       )}
     </div>
@@ -127,6 +117,9 @@ const MessageBubble = memo(function MessageBubble({
     if (Math.abs(swipeDx) >= 50) onSwipeReply?.(msg);
     setSwipeDx(0);
   };
+
+  // Clear long-press timer on unmount to prevent calling setState on unmounted component
+  useEffect(() => () => clearTimeout(longPressRef.current), []);
 
   const handleDown = () => {
     longPressRef.current = setTimeout(() => {
@@ -170,7 +163,7 @@ const MessageBubble = memo(function MessageBubble({
       {/* Selection indicator */}
       {selectionMode && (
         <div
-          className={`absolute top-1/2 -translate-y-1/2 w-5 h-5 rounded-full border-2 flex items-center justify-center transition-all z-10 ${
+          className={`absolute top-1/2 -translate-y-1/2 w-5 h-5 rounded-full border-2 flex items-center justify-center transition-[background,border-color] z-10 ${
             selected ? 'bg-brand-500 border-brand-500' : 'border-[var(--border)] bg-[var(--input-bg)]'
           }`}
           style={{ left: isOwn ? 'auto' : '-24px', right: isOwn ? '-24px' : 'auto' }}
@@ -270,7 +263,7 @@ const MessageBubble = memo(function MessageBubble({
                 <button
                   key={emoji}
                   onClick={() => onReaction(msg.id, emoji)}
-                  className="flex items-center gap-0.5 bg-[var(--input-bg)] border border-[var(--border)] rounded-full px-1.5 py-0.5 text-xs hover:bg-[var(--hover)] transition-all"
+                  className="flex items-center gap-0.5 bg-[var(--input-bg)] border border-[var(--border)] rounded-full px-1.5 py-0.5 text-xs hover:bg-[var(--hover)] transition-colors"
                 >
                   <span>{emoji}</span>
                   {uids.length > 1 && <span className="text-[10px] text-[var(--text-secondary)]">{uids.length}</span>}

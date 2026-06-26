@@ -17,7 +17,7 @@ import {
   deleteMessageForMe, deleteMessageForEveryone, deleteMultipleMessages,
   editMessage, forwardMessage, muteChat, blockUser, clearChat,
   subscribeToPresence, setOnline, checkIsBlocked,
-  addReaction, getUserById, subscribeToGroups,
+  addReaction, getUserById, subscribeToGroups, loadOlderMessages,
   doc, onSnapshot, addDoc, collection, serverTimestamp,
   sendPushNotification, makePreview, uploadMedia
 } from '../../firebase';
@@ -523,9 +523,12 @@ export default function ChatWindow({ chatPartner, onBack, onVoiceCall, onVideoCa
   const { user, profile } = useAuth();
   const { wallpaperBg } = useTheme();
   const [messages, setMessages]           = useState([]);
+  const [olderMsgs, setOlderMsgs]         = useState([]); // prepended pages
+  const [loadingOlder, setLoadingOlder]   = useState(false);
+  const [hasMore, setHasMore]             = useState(true);
+  const oldestDocRef                      = useRef(null);  // cursor for pagination
   const [text, setText]                   = useState('');
   const [chatId, setChatId]               = useState(null);
-  const [sending, setSending]             = useState(false);
   const [showVoice, setShowVoice]         = useState(false);
   const [showCamera, setShowCamera]       = useState(false);
   const [photoViewer, setPhotoViewer]     = useState(null); // { images, startIndex }
@@ -622,6 +625,11 @@ export default function ChatWindow({ chatPartner, onBack, onVoiceCall, onVideoCa
         if (last?.senderId !== user.uid) onSoundEffect?.('receive');
       }
       setMessages(msgs);
+      if (msgs.length > 0 && !oldestDocRef.current) {
+        // Store a reference so we know where to paginate from
+        // We'll pass the raw timestamp of the first message as cursor
+        oldestDocRef.current = msgs[0]?.timestamp;
+      }
       // Only mark read if the document is visible (user is actively looking at it)
       if (document.visibilityState === 'visible') {
         markMessagesRead(chatId, user.uid, false).catch(() => {});
@@ -670,6 +678,20 @@ export default function ChatWindow({ chatPartner, onBack, onVoiceCall, onVideoCa
   }, [chatId, user?.uid]);
 
   // ── Push notification helper ──────────────────────────
+  // Load older messages (pagination)
+  const handleLoadOlder = useCallback(async () => {
+    if (!chatId || loadingOlder || !hasMore) return;
+    const firstMsg = messages[0];
+    if (!firstMsg?.timestamp) return;
+    setLoadingOlder(true);
+    try {
+      const older = await loadOlderMessages(chatId, firstMsg.timestamp);
+      if (older.length < 40) setHasMore(false);
+      if (older.length > 0) setOlderMsgs(prev => [...older, ...prev]);
+    } catch { /* silent — user can scroll again */ }
+    finally { setLoadingOlder(false); }
+  }, [chatId, loadingOlder, hasMore, messages]);
+
   const pushToPartner = useCallback((content, type) => {
     if (!chatPartner?.id || !profile?.name) return;
     sendPushNotification(
@@ -880,10 +902,19 @@ export default function ChatWindow({ chatPartner, onBack, onVoiceCall, onVideoCa
   };
 
   // Filters
+  // Merge paginated older messages with live subscription messages
+  const allMessages = useMemo(() => {
+    if (!olderMsgs.length) return messages;
+    // Deduplicate by id (subscription may overlap with loaded pages)
+    const ids = new Set(messages.map(m => m.id));
+    const uniqueOlder = olderMsgs.filter(m => !ids.has(m.id));
+    return [...uniqueOlder, ...messages];
+  }, [olderMsgs, messages]);
+
   // Memoize visible messages to avoid recomputing on every render
   const visible = useMemo(() =>
-    messages.filter(m => !m.deletedFor?.includes(user.uid)),
-    [messages, user?.uid]
+    allMessages.filter(m => !m.deletedFor?.includes(user.uid)),
+    [allMessages, user?.uid]
   );
 
   // Indexed, debounced search engine
@@ -1133,6 +1164,9 @@ export default function ChatWindow({ chatPartner, onBack, onVoiceCall, onVideoCa
         onSwipeReply={(m) => { setEditingMsg(null); setEditText(''); setReplyTo(m); }}
         enterSelectionMode={enterSelectionMode}
         toggleMsgSelect={toggleMsgSelect}
+        onLoadOlder={handleLoadOlder}
+        loadingOlder={loadingOlder}
+        hasMore={hasMore}
       />
 
       {/* UNIFY AI — Summary Answer Card */}

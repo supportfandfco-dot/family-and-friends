@@ -50,6 +50,9 @@ export default function VirtualMessageList({
   onSwipeReply,
   enterSelectionMode,
   toggleMsgSelect,
+  onLoadOlder,
+  loadingOlder,
+  hasMore,
 }) {
   const containerRef = useRef(null);
   const bottomRef    = useRef(null);
@@ -110,7 +113,11 @@ export default function VirtualMessageList({
     if (!el) return;
     const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 150;
     setShowJumpBtn(!atBottom);
-  }, []);
+    // Load older messages when user scrolls near the top
+    if (el.scrollTop < 80 && !loadingOlder && hasMore) {
+      onLoadOlder?.();
+    }
+  }, [loadingOlder, hasMore, onLoadOlder]);
 
   useEffect(() => {
     const el = containerRef.current;
@@ -129,7 +136,7 @@ export default function VirtualMessageList({
     {showJumpBtn && (
       <button
         onClick={jumpToBottom}
-        className="absolute bottom-4 right-4 z-20 w-10 h-10 rounded-full bg-[var(--sidebar-bg)] border border-[var(--border)] shadow-lg flex items-center justify-center hover:bg-[var(--hover)] transition-all active:scale-95"
+        className="absolute bottom-4 right-4 z-20 w-10 h-10 rounded-full bg-[var(--sidebar-bg)] border border-[var(--border)] shadow-lg flex items-center justify-center hover:bg-[var(--hover)] transition-[background,transform] active:scale-95"
         style={{ transform: 'translateZ(0)' }}
       >
         <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" className="text-[var(--text-secondary)]">
@@ -140,8 +147,25 @@ export default function VirtualMessageList({
     <div
       ref={containerRef}
       className="flex-1 overflow-y-auto px-4"
-      style={{ scrollbarWidth: 'thin', WebkitOverflowScrolling: 'touch' }}
+      style={{
+        scrollbarWidth: 'thin',
+        WebkitOverflowScrolling: 'touch',
+        overscrollBehavior: 'contain',       /* prevent scroll chaining to body */
+        scrollBehavior: 'auto',              /* let JS control smooth scroll explicitly */
+      }}
     >
+      {/* Older messages loading indicator */}
+      {loadingOlder && (
+        <div className="flex justify-center py-2 flex-shrink-0">
+          <div className="w-5 h-5 border-2 border-brand-500/30 border-t-brand-500 rounded-full animate-spin" />
+        </div>
+      )}
+      {!hasMore && messages.length > 60 && (
+        <div className="text-center text-[11px] text-[var(--text-secondary)] py-2 flex-shrink-0">
+          Beginning of conversation
+        </div>
+      )}
+
       {/* Total height spacer — gives scrollbar correct size */}
       <div style={{ height: totalHeight, position: 'relative' }}>
         {/* Padding top for the visible block */}
@@ -161,11 +185,25 @@ export default function VirtualMessageList({
               );
             }
 
+            if (row.type === 'unread') {
+              return (
+                <MeasuredRow key="unread-divider" id="unread-divider" onMeasure={measureRow}>
+                  <div className="flex items-center gap-3 my-2 px-2">
+                    <div className="flex-1 h-px bg-brand-500/30" />
+                    <span className="text-[11px] text-brand-500 font-semibold px-2 py-0.5 bg-brand-500/10 rounded-full flex-shrink-0">
+                      Unread messages
+                    </span>
+                    <div className="flex-1 h-px bg-brand-500/30" />
+                  </div>
+                </MeasuredRow>
+              );
+            }
+
             return (
               <MeasuredRow key={row.id} id={row.id} onMeasure={measureRow}>
                 <div
                   className={isCurrentResult
-                    ? 'ring-2 ring-brand-400 ring-offset-2 ring-offset-[var(--chat-bg)] rounded-2xl transition-all'
+                    ? 'ring-2 ring-brand-400 ring-offset-2 ring-offset-[var(--chat-bg)] rounded-2xl transition-[box-shadow]'
                     : isSearchMatch
                       ? 'bg-brand-500/10 rounded-2xl'
                       : ''}

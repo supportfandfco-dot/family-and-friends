@@ -13,7 +13,7 @@ import { getAuth, RecaptchaVerifier, signInWithPhoneNumber,
 import {
   getFirestore, collection, doc, setDoc, getDoc, getDocs,
   addDoc, updateDoc, deleteDoc, onSnapshot, query, where,
-  orderBy, limit, serverTimestamp, arrayUnion, arrayRemove,
+  orderBy, limit, startAfter, serverTimestamp, arrayUnion, arrayRemove,
   increment, writeBatch
 } from 'firebase/firestore';
 import { getStorage, ref, uploadBytes, getDownloadURL } from 'firebase/storage';
@@ -168,11 +168,37 @@ export async function sendMessage(chatId, senderId, content, type = 'text', extr
 }
 
 export function subscribeToMessages(chatId, callback) {
+  // Initial page: last 60 messages — enough to fill any screen
   const q = query(
     collection(db, 'chats', chatId, 'messages'),
-    orderBy('timestamp', 'asc'), limit(200)
+    orderBy('timestamp', 'asc'), limit(60)
   );
   return onSnapshot(q, snap => callback(snap.docs.map(d => ({ id: d.id, ...d.data() }))));
+}
+
+// Load an older page — call when user scrolls to top
+export async function loadOlderMessages(chatId, beforeDoc, pageSize = 40) {
+  const q = query(
+    collection(db, 'chats', chatId, 'messages'),
+    orderBy('timestamp', 'desc'),
+    startAfter(beforeDoc),
+    limit(pageSize)
+  );
+  const snap = await getDocs(q);
+  // Return in ascending order (oldest first)
+  return snap.docs.reverse().map(d => ({ id: d.id, ...d.data(), _docRef: d }));
+}
+
+// Same for groups
+export async function loadOlderGroupMessages(groupId, beforeDoc, pageSize = 40) {
+  const q = query(
+    collection(db, 'groups', groupId, 'messages'),
+    orderBy('timestamp', 'desc'),
+    startAfter(beforeDoc),
+    limit(pageSize)
+  );
+  const snap = await getDocs(q);
+  return snap.docs.reverse().map(d => ({ id: d.id, ...d.data(), _docRef: d }));
 }
 
 export function subscribeToChats(uid, callback) {
@@ -237,7 +263,7 @@ export async function resetUnreadCount(chatId, uid, isGroup = false) {
 export function subscribeToGroupMessages(groupId, callback) {
   const q = query(
     collection(db, 'groups', groupId, 'messages'),
-    orderBy('timestamp', 'asc'), limit(200)
+    orderBy('timestamp', 'asc'), limit(60)
   );
   return onSnapshot(q, snap => callback(snap.docs.map(d => ({ id: d.id, ...d.data() }))));
 }
