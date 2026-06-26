@@ -179,18 +179,51 @@ export function useWebRTC(currentUserId) {
       } catch {}
     };
 
-    // Connection state changes
-    pc.onconnectionstatechange = () => {
+    // Connection state changes — full state machine with ICE restart
+    let iceRestartAttempts = 0;
+    const MAX_ICE_RESTARTS = 3;
+
+    pc.onconnectionstatechange = async () => {
       const state = pc.connectionState;
+
       if (state === 'connected') {
+        iceRestartAttempts = 0;
         setCallStatus('connected');
         clearInterval(timerRef.current);
         timerRef.current = setInterval(() => setCallDuration(d => d + 1), 1000);
       }
-      if (['disconnected', 'failed', 'closed'].includes(state)) {
+
+      if (state === 'disconnected') {
+        // Brief disconnect — wait 4s then attempt ICE restart before giving up
+        setCallStatus('reconnecting');
+        setTimeout(async () => {
+          if (pc.connectionState !== 'connected' && iceRestartAttempts < MAX_ICE_RESTARTS) {
+            iceRestartAttempts++;
+            try {
+              // ICE restart: create new offer with iceRestart flag
+              const offer = await pc.createOffer({ iceRestart: true });
+              await pc.setLocalDescription(offer);
+              const cid = callIdRef.current;
+              if (cid) await updateDoc(doc(db, 'calls', cid), { offer: { sdp: offer.sdp, type: offer.type } }).catch(() => {});
+            } catch {}
+          }
+        }, 4000);
+      }
+
+      if (['failed', 'closed'].includes(state)) {
         const cid = callIdRef.current;
         if (cid) updateDoc(doc(db, 'calls', cid), { status: 'ended' }).catch(() => {});
         cleanup();
+      }
+    };
+
+    // ICE state — log failed candidates for debugging
+    pc.oniceconnectionstatechange = () => {
+      if (pc.iceConnectionState === 'failed') {
+        // Trigger ICE restart via offer with iceRestart flag
+        pc.createOffer({ iceRestart: true })
+          .then(offer => pc.setLocalDescription(offer))
+          .catch(() => {});
       }
     };
 
@@ -382,7 +415,7 @@ export function useWebRTC(currentUserId) {
       localStreamRef.current.addTrack(newTrack);
       if (localVideoRef.current) localVideoRef.current.srcObject = localStreamRef.current;
     } catch (e) {
-      console.warn('[WebRTC] Switch camera failed:', e.message);
+      // Camera switch failed — device may not support switching
     }
   }, []);
 
@@ -408,7 +441,7 @@ export function useWebRTC(currentUserId) {
   useEffect(() => () => cleanup(), []);
 
   return {
-    callStatus, callType, remoteUserId, callId,
+    callStatus, callType, remoteUserId, callId, // callStatus: idle|ringing|connected|reconnecting
     isMuted, isVideoOff, isSpeaker, callDuration,
     localVideoRef, remoteVideoRef,
     startCall, answerCall, declineCall, endCall,

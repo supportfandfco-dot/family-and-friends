@@ -346,7 +346,9 @@ export default function CallScreen({
         <div className="flex items-center gap-2">
           {callStatus === 'ringing' && (<>
             <div className="w-2 h-2 rounded-full bg-yellow-400 animate-pulse" />
-            <span className="text-brand-200 text-sm">{isIncoming ? 'Incoming call...' : 'Calling...'}</span>
+            <span className="text-brand-200 text-sm">
+              {callStatus === 'reconnecting' ? '↻ Reconnecting...' : isIncoming ? 'Incoming call...' : 'Calling...'}
+            </span>
           </>)}
           {callStatus === 'connected' && (<>
             <div className="w-2 h-2 rounded-full bg-brand-400" />

@@ -200,7 +200,7 @@ export function useGroupWebRTC(currentUserId) {
         }
       });
       allUnsubsRef.current.push(unsub);
-    } catch (e) { console.warn('offerToPeer failed:', peerUid, e); }
+    } catch { /* offerToPeer failed — peer may have disconnected */ }
   }, [makePc, drainPending, subscribeTheirCandidates]);
 
   const answerOffer = useCallback(async (cid, signal) => {
@@ -215,7 +215,7 @@ export function useGroupWebRTC(currentUserId) {
       await storeGroupAnswer(cid, peerUid, uid, { type: answer.type, sdp: answer.sdp });
       await drainPending(peerUid);
       subscribeTheirCandidates(cid, peerUid);
-    } catch (e) { console.warn('answerOffer failed:', peerUid, e); }
+    } catch { /* answerOffer failed — peer may have disconnected */ }
   }, [makePc, drainPending, subscribeTheirCandidates]);
 
   const listenForOffers = useCallback((cid) => {

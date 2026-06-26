@@ -26,7 +26,11 @@ export function AuthProvider({ children }) {
       if (u) {
         const snap = await getDoc(doc(db, 'users', u.uid));
         if (snap.exists()) setProfile({ id: snap.id, ...snap.data() });
-        try { setupPresence(u.uid); } catch {}  // RTDB optional — don't block auth
+        try {
+          const cleanupPresence = setupPresence(u.uid);
+          // Store cleanup so we can call it on logout
+          if (typeof cleanupPresence === 'function') window._presenceCleanup = cleanupPresence;
+        } catch {}  // RTDB optional — don't block auth
       } else {
         setProfile(null);
       }
@@ -146,6 +150,11 @@ export function AuthProvider({ children }) {
   // ── Logout ───────────────────────────────────────────
   const logout = useCallback(async () => {
     clearRecaptcha();
+    // Clean up presence before signing out
+    if (typeof window._presenceCleanup === 'function') {
+      try { window._presenceCleanup(); } catch {}
+      window._presenceCleanup = null;
+    }
     await signOut(auth);
     setProfile(null);
     setUser(null);

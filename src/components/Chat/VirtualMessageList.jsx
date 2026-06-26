@@ -146,12 +146,13 @@ export default function VirtualMessageList({
     )}
     <div
       ref={containerRef}
-      className="flex-1 overflow-y-auto px-4"
+      className="flex-1 overflow-y-auto px-4 virtual-scroll-container"
       style={{
         scrollbarWidth: 'thin',
         WebkitOverflowScrolling: 'touch',
-        overscrollBehavior: 'contain',       /* prevent scroll chaining to body */
-        scrollBehavior: 'auto',              /* let JS control smooth scroll explicitly */
+        overscrollBehavior: 'contain',
+        scrollBehavior: 'auto',
+        contain: 'strict',
       }}
     >
       {/* Older messages loading indicator */}

@@ -11,7 +11,8 @@ import { getAuth, RecaptchaVerifier, signInWithPhoneNumber,
   reauthenticateWithCredential
 } from 'firebase/auth';
 import {
-  getFirestore, collection, doc, setDoc, getDoc, getDocs,
+  getFirestore, initializeFirestore, persistentLocalCache, persistentMultipleTabManager,
+  collection, doc, setDoc, getDoc, getDocs,
   addDoc, updateDoc, deleteDoc, onSnapshot, query, where,
   orderBy, limit, startAfter, serverTimestamp, arrayUnion, arrayRemove,
   increment, writeBatch
@@ -31,23 +32,65 @@ const firebaseConfig = {
 };
 // ───────────────────────────────────────────────────────────────
 
-const app     = initializeApp(firebaseConfig);
-const auth    = getAuth(app);
-const db      = getFirestore(app);
+const app  = initializeApp(firebaseConfig);
+const auth = getAuth(app);
+
+// Firestore with persistent cache — messages load offline, sync when back online
+let db;
+try {
+  db = initializeFirestore(app, {
+    localCache: persistentLocalCache({
+      tabManager: persistentMultipleTabManager(),
+    }),
+  });
+} catch {
+  // Fall back to default if persistence fails (e.g. incognito/private mode)
+  db = getFirestore(app);
+}
+
 const storage = getStorage(app);
 const rtdb    = getDatabase(app);
 
 // ── Presence system ────────────────────────────────────────────
 export function setupPresence(uid) {
   const userStatusDbRef = dbRef(rtdb, `/status/${uid}`);
-  const isOnline  = { state: 'online',  last_changed: dbTimestamp() };
-  const isOffline = { state: 'offline', last_changed: dbTimestamp() };
-  const connRef   = dbRef(rtdb, '.info/connected');
-  onValue(connRef, async snapshot => {
-    if (!snapshot.val()) return;
-    await onDisconnect(userStatusDbRef).set(isOffline);
-    await set(userStatusDbRef, isOnline);
+  const connRef         = dbRef(rtdb, '.info/connected');
+
+  const unsub = onValue(connRef, async snapshot => {
+    if (!snapshot.val()) return; // not connected to RTDB
+    try {
+      // Set offline handler first — runs server-side on disconnect
+      await onDisconnect(userStatusDbRef).set({
+        state: 'offline',
+        last_changed: dbTimestamp(),
+      });
+      // Then mark online
+      await set(userStatusDbRef, {
+        state: 'online',
+        last_changed: dbTimestamp(),
+      });
+    } catch {
+      // RTDB permission error — presence unavailable, non-fatal
+    }
   });
+
+  // Also handle tab visibility changes
+  const handleVisibility = async () => {
+    try {
+      await set(userStatusDbRef, {
+        state: document.visibilityState === 'visible' ? 'online' : 'offline',
+        last_changed: dbTimestamp(),
+      });
+    } catch {}
+  };
+  document.addEventListener('visibilitychange', handleVisibility);
+
+  // Return cleanup function
+  return () => {
+    unsub();
+    document.removeEventListener('visibilitychange', handleVisibility);
+    set(userStatusDbRef, { state: 'offline', last_changed: dbTimestamp() }).catch(() => {});
+  };
 }
 
 export function subscribeToPresence(uid, callback) {
@@ -91,7 +134,7 @@ export async function searchUsersByName(searchTerm, currentUid) {
         (u.name?.toLowerCase().includes(term) || u.nameLower?.includes(term))
       );
   } catch (e) {
-    console.error('searchUsersByName error:', e);
+    // Search error — non-fatal
     return [];
   }
 }
@@ -780,7 +823,7 @@ export async function initFCMToken(uid) {
     const msg = getMsg();
     if (!msg) return null;
     const vapidKey = import.meta.env.VITE_FIREBASE_VAPID_KEY;
-    if (!vapidKey) { console.warn('VITE_FIREBASE_VAPID_KEY not set'); return null; }
+    if (!vapidKey) return null; // VAPID key not configured — push disabled
     // Explicitly register the SW first — required for localhost dev
     const reg = await navigator.serviceWorker.register('/firebase-messaging-sw.js', { scope: '/' });
     await navigator.serviceWorker.ready;
@@ -790,7 +833,7 @@ export async function initFCMToken(uid) {
     }
     return token;
   } catch (e) {
-    console.warn('FCM token error:', e);
+    // FCM token unavailable — push notifications won't work until permissions granted
     return null;
   }
 }
@@ -817,7 +860,7 @@ async function getV1AccessToken() {
   const clientEmail = import.meta.env.VITE_SA_CLIENT_EMAIL;
   const privateKeyPem = import.meta.env.VITE_SA_PRIVATE_KEY?.replace(/\\n/g, '\n');
   if (!clientEmail || !privateKeyPem) {
-    console.warn('Service account env vars not set (VITE_SA_CLIENT_EMAIL / VITE_SA_PRIVATE_KEY)');
+    // Push notifications disabled — VITE_SA_CLIENT_EMAIL / VITE_SA_PRIVATE_KEY not configured
     return null;
   }
 
@@ -869,7 +912,7 @@ async function getV1AccessToken() {
     body: `grant_type=urn%3Aietf%3Aparams%3Aoauth%3Agrant-type%3Ajwt-bearer&assertion=${jwt}`,
   });
   const json = await res.json();
-  if (!json.access_token) { console.warn('OAuth token exchange failed:', json); return null; }
+  if (!json.access_token) return null; // OAuth exchange failed — push disabled
 
   _v1TokenCache = { token: json.access_token, expiresAt: Date.now() + json.expires_in * 1000 };
   return json.access_token;
@@ -921,7 +964,7 @@ export async function sendPushNotification(recipientUid, title, body, data = {})
       }),
     });
   } catch (e) {
-    console.warn('sendPush failed:', e);
+    // Push send failed — non-critical, app continues
   }
 }
 
@@ -939,7 +982,6 @@ export function makePreview(content, type) {
 // ── Media Upload (Firebase Storage) ────────────────────────────
 export async function uploadMedia(fileOrBase64, path) {
   let blob;
-  let filename = path;
 
   if (typeof fileOrBase64 === 'string' && fileOrBase64.startsWith('data:')) {
     const res = await fetch(fileOrBase64);
@@ -948,9 +990,24 @@ export async function uploadMedia(fileOrBase64, path) {
     blob = fileOrBase64;
   }
 
-  const storageRef = ref(storage, filename);
-  await uploadBytes(storageRef, blob);
-  return await getDownloadURL(storageRef);
+  // Validate blob before attempting upload
+  if (!blob || blob.size === 0) {
+    throw new Error('Empty file — nothing to upload');
+  }
+
+  const storageRef = ref(storage, path);
+
+  // Race upload against a 30-second timeout
+  const uploadPromise = (async () => {
+    await uploadBytes(storageRef, blob);
+    return await getDownloadURL(storageRef);
+  })();
+
+  const timeoutPromise = new Promise((_, reject) =>
+    setTimeout(() => reject(new Error('Upload timed out after 30s')), 30_000)
+  );
+
+  return Promise.race([uploadPromise, timeoutPromise]);
 }
 
 // ── Exports ────────────────────────────────────────────────────

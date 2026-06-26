@@ -724,9 +724,10 @@ export default function ChatWindow({ chatPartner, onBack, onVoiceCall, onVideoCa
   // File (base64)
   const handleFile = async e => {
     const file = e.target.files[0];
-    if (!file || !chatId) return;
+    if (!file) return;
     e.target.value = '';
     setShowAttach(false);
+    if (!chatId) { toast.error('Chat not ready yet — try again'); return; }
     if (file.size > 8 * 1024 * 1024) { toast.error('File too large (max 8MB)'); return; }
     if (blocked) { toast.error(`You blocked ${chatPartner.name}. Unblock to send files.`); return; }
     const isImage = file.type.startsWith('image/');
@@ -774,7 +775,8 @@ export default function ChatWindow({ chatPartner, onBack, onVoiceCall, onVideoCa
   // Voice (base64)
   const handleVoice = async (blob, dur) => {
     setShowVoice(false);
-    if (!chatId || !blob) return;
+    if (!blob) return;
+    if (!chatId) { toast.error('Chat not ready — try again'); return; }
     if (blocked) { toast.error(`You blocked ${chatPartner.name}. Unblock first.`); return; }
     const tid = toast.loading('Sending voice note...');
     try {
