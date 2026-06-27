@@ -1,8 +1,10 @@
 // ═══════════════════════════════════════════════════════════
-//  VoiceAI — Voice interaction overlay
-//  Fixed: stale closure on voiceTranscript, proper phase flow
+//  VoiceAI — Voice interaction overlay.
+//  Uses the EXISTING overlayAsk() pipeline — same as text overlay.
+//  Auto-starts listening on open.
+//  Continuous conversation: AI speaks → recognition restarts.
 // ═══════════════════════════════════════════════════════════
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, useCallback } from 'react';
 import { X, Mic, MicOff, Sparkles } from 'lucide-react';
 import useAIStore from './useAIStore';
 import { overlayAsk } from './unifyService';
@@ -12,12 +14,12 @@ function Waveform({ active }) {
   return (
     <div className="flex items-center justify-center gap-1 h-10">
       {bars.map((h, i) => (
-        <div key={i} className="rounded-full transition-all"
+        <div key={i} className="rounded-full"
           style={{
             width: 3,
             height: active ? h * 2 : 4,
             background: active
-              ? `linear-gradient(to top, #4cd7f6, #d0bcff)`
+              ? 'linear-gradient(to top, #4cd7f6, #d0bcff)'
               : 'rgba(255,255,255,0.2)',
             animation: active ? `wave-bar 0.8s ease-in-out ${i * 0.07}s infinite alternate` : 'none',
             transition: 'height 0.3s ease',
@@ -27,167 +29,284 @@ function Waveform({ active }) {
   );
 }
 
-function TranscriptBubble({ text }) {
-  if (!text) return null;
-  return (
-    <div className="px-5 py-3 rounded-2xl text-center animate-fade-in max-w-[80%]"
-      style={{
-        background: 'rgba(32,31,31,0.7)',
-        backdropFilter: 'blur(20px)',
-        border: '1px solid rgba(255,255,255,0.08)',
-        color: '#e5e2e1',
-        fontSize: 15,
-        lineHeight: '1.5',
-      }}>
-      {text}
-    </div>
-  );
+// Load TTS voices reliably — Chrome loads them async
+function waitForVoices() {
+  return new Promise(resolve => {
+    const voices = window.speechSynthesis?.getVoices() || [];
+    if (voices.length > 0) { resolve(voices); return; }
+    const handler = () => resolve(window.speechSynthesis.getVoices());
+    window.speechSynthesis.addEventListener('voiceschanged', handler, { once: true });
+    setTimeout(() => { window.speechSynthesis.removeEventListener('voiceschanged', handler); resolve(window.speechSynthesis.getVoices()); }, 1500);
+  });
 }
 
 export default function VoiceAI({ context }) {
   const {
     voiceAIOpen, closeVoiceAI,
     voiceTranscript, setVoiceTranscript,
-    voiceResponse, setVoiceResponse,
+    voiceResponse,  setVoiceResponse,
     voiceListening, setVoiceListening,
   } = useAIStore();
 
-  const [phase, setPhase] = useState('idle');
-  const [error, setError] = useState(null);
-  const recognitionRef   = useRef(null);
-  const abortRef         = useRef(null);
-  // Use ref for transcript to avoid stale closure in rec.onend
-  const transcriptRef    = useRef('');
+  const [phase,   setPhase]   = useState('idle');   // idle | listening | thinking | speaking
+  const [error,   setError]   = useState(null);
+  const [muted,   setMuted]   = useState(false);
 
-  useEffect(() => {
-    if (!voiceAIOpen) return;
-    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-    if (!SpeechRecognition) {
-      setError('Speech recognition not supported in this browser. Try Chrome on Android.');
-      return;
-    }
-    const rec = new SpeechRecognition();
-    rec.continuous      = false;
-    rec.interimResults  = true;
-    rec.lang            = 'en-US';
+  const recognitionRef  = useRef(null);
+  const abortRef        = useRef(null);
+  const transcriptRef   = useRef('');          // ref avoids stale closure in onend
+  const isSpeakingRef   = useRef(false);
+  const isActiveRef     = useRef(false);       // true while overlay is open and user hasn't muted
+
+  // ── Build recogniser ────────────────────────────────────
+  const buildRecognition = useCallback(() => {
+    const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (!SR) return null;
+    const rec = new SR();
+    rec.continuous     = false;   // false = more reliable cross-browser
+    rec.interimResults = true;
+    rec.lang           = 'en-US';
 
     rec.onstart = () => {
       setPhase('listening');
       setVoiceListening(true);
       transcriptRef.current = '';
+      setVoiceTranscript('');
     };
 
     rec.onresult = (e) => {
       const t = Array.from(e.results).map(r => r[0].transcript).join('');
-      transcriptRef.current = t;       // always update ref — no stale closure
+      transcriptRef.current = t;
       setVoiceTranscript(t);
     };
 
-    // onend fires after recognition stops — use ref for latest transcript
+    // onend is the single reliable completion event
     rec.onend = () => {
       setVoiceListening(false);
       const finalText = transcriptRef.current.trim();
+      transcriptRef.current = '';
+
+      if (!isActiveRef.current) return;  // overlay closed
+
       if (finalText) {
         handleAsk(finalText);
       } else {
+        // No speech captured — restart recognition to keep listening
         setPhase('idle');
+        setTimeout(() => {
+          if (isActiveRef.current && !isSpeakingRef.current) startRecognition();
+        }, 300);
       }
     };
 
     rec.onerror = (e) => {
       setVoiceListening(false);
-      setPhase('idle');
+      if (!isActiveRef.current || e.error === 'aborted') return;
       if (e.error === 'not-allowed') {
-        setError('Microphone permission denied. Please allow microphone access.');
-      } else if (e.error !== 'no-speech') {
-        setError(`Microphone error: ${e.error}`);
+        setError('Microphone access denied. Allow mic in browser settings.');
+        setPhase('idle');
+        return;
       }
+      // no-speech, network — restart quietly
+      setPhase('idle');
+      setTimeout(() => {
+        if (isActiveRef.current && !isSpeakingRef.current) startRecognition();
+      }, 500);
     };
 
-    recognitionRef.current = rec;
-    return () => { try { rec.abort(); } catch {} recognitionRef.current = null; };
-  }, [voiceAIOpen]);
+    return rec;
+  }, []);
 
-  const startListening = () => {
-    if (!recognitionRef.current) return;
+  // ── Start recognition ───────────────────────────────────
+  const startRecognition = useCallback(() => {
+    if (muted || isSpeakingRef.current || !isActiveRef.current) return;
+    try {
+      if (recognitionRef.current) {
+        try { recognitionRef.current.abort(); } catch {}
+      }
+      const rec = buildRecognition();
+      if (!rec) {
+        setError('Speech recognition not supported. Use Chrome or Edge.');
+        return;
+      }
+      recognitionRef.current = rec;
+      rec.start();
+    } catch (e) {
+      setPhase('idle');
+    }
+  }, [muted, buildRecognition]);
+
+  // ── Speak AI response, then restart listening ───────────
+  const speak = useCallback(async (text) => {
+    if (!text?.trim() || !('speechSynthesis' in window)) return;
+    isSpeakingRef.current = true;
+    setPhase('speaking');
+
+    window.speechSynthesis.cancel();
+    const voices = await waitForVoices();
+    const preferred = voices.find(v =>
+      v.name.includes('Google UK English Female') ||
+      v.name.includes('Google US English') ||
+      v.name === 'Samantha' ||
+      (v.lang.startsWith('en') && !v.name.includes('Male'))
+    ) || null;
+
+    return new Promise(resolve => {
+      const utt   = new SpeechSynthesisUtterance(text.slice(0, 500));
+      utt.rate    = 1.05;
+      utt.pitch   = 1.0;
+      utt.volume  = 1.0;
+      if (preferred) utt.voice = preferred;
+
+      utt.onend = () => {
+        isSpeakingRef.current = false;
+        setPhase('idle');
+        resolve();
+        // Restart listening after AI finishes speaking
+        setTimeout(() => {
+          if (isActiveRef.current && !muted) startRecognition();
+        }, 400);
+      };
+      utt.onerror = () => {
+        isSpeakingRef.current = false;
+        setPhase('idle');
+        resolve();
+        setTimeout(() => {
+          if (isActiveRef.current && !muted) startRecognition();
+        }, 400);
+      };
+
+      window.speechSynthesis.speak(utt);
+    });
+  }, [muted, startRecognition]);
+
+  // ── AI ask — uses the EXACT same pipeline as the text overlay ──
+  const handleAsk = useCallback(async (question) => {
+    if (!question?.trim()) { setPhase('idle'); return; }
+
+    setPhase('thinking');
     setVoiceTranscript('');
     setVoiceResponse('');
-    transcriptRef.current = '';
-    setError(null);
-    try { recognitionRef.current.start(); } catch (e) {
-      setError('Could not start microphone. ' + e.message);
-    }
-  };
-
-  const stopListening = () => {
-    try { recognitionRef.current?.stop(); } catch {}
-  };
-
-  const handleAsk = async (question) => {
-    if (!question?.trim()) { setPhase('idle'); return; }
-    setPhase('thinking');
     abortRef.current?.abort();
     abortRef.current = new AbortController();
 
-    try {
-      await overlayAsk({
-        question,
-        context: context || null,
-        signal: abortRef.current.signal,
-        onProgress: () => setPhase('thinking'),
-        onDone: (full) => {
-          setVoiceResponse(full || '');
+    await overlayAsk({
+      question,
+      context: context || null,
+      signal:  abortRef.current.signal,
+      onProgress: () => {},
+      onDone: async (full) => {
+        if (!full?.trim()) {
+          setError('No response — check Groq API key in Cloudflare settings.');
           setPhase('idle');
-          if ('speechSynthesis' in window && full) {
-            window.speechSynthesis.cancel();
-            const utter = new SpeechSynthesisUtterance(full.slice(0, 400));
-            utter.rate  = 1.05;
-            utter.pitch = 1;
-            window.speechSynthesis.speak(utter);
-          }
-        },
-        onError: (err) => {
-          if (err?.name === 'AbortError') return;
-          setError('AI request failed. Check your Groq API key in Cloudflare settings.');
-          setPhase('idle');
-        },
-      });
-    } catch (e) {
-      if (e?.name !== 'AbortError') setError('Unexpected error. Please try again.');
+          setTimeout(() => { if (isActiveRef.current && !muted) startRecognition(); }, 800);
+          return;
+        }
+        setVoiceResponse(full);
+        await speak(full);
+      },
+      onError: (err) => {
+        if (err?.name === 'AbortError') return;
+        setError('AI request failed. Check your Groq API key.');
+        setPhase('idle');
+        setTimeout(() => { if (isActiveRef.current && !muted) startRecognition(); }, 1000);
+      },
+    });
+  }, [context, speak, muted, startRecognition]);
+
+  // ── Open/close lifecycle ────────────────────────────────
+  useEffect(() => {
+    if (!voiceAIOpen) {
+      isActiveRef.current = false;
+      try { recognitionRef.current?.abort(); } catch {}
+      abortRef.current?.abort();
+      window.speechSynthesis?.cancel();
+      isSpeakingRef.current = false;
       setPhase('idle');
+      setError(null);
+      return;
+    }
+
+    // Opening — auto-start listening
+    isActiveRef.current = true;
+    setPhase('idle');
+    setError(null);
+    setVoiceResponse('');
+    setVoiceTranscript('');
+
+    // Small delay so the overlay animation completes before mic request
+    setTimeout(() => {
+      if (isActiveRef.current) startRecognition();
+    }, 300);
+
+    return () => {
+      isActiveRef.current = false;
+      try { recognitionRef.current?.abort(); } catch {}
+      abortRef.current?.abort();
+      window.speechSynthesis?.cancel();
+    };
+  }, [voiceAIOpen]);
+
+  // ── Mute toggle ─────────────────────────────────────────
+  const handleMuteToggle = () => {
+    const next = !muted;
+    setMuted(next);
+    if (next) {
+      try { recognitionRef.current?.abort(); } catch {}
+      window.speechSynthesis?.cancel();
+      isSpeakingRef.current = false;
+      setPhase('idle');
+    } else {
+      setTimeout(() => { if (isActiveRef.current) startRecognition(); }, 200);
     }
   };
 
   const handleClose = () => {
+    isActiveRef.current = false;
     try { recognitionRef.current?.abort(); } catch {}
     abortRef.current?.abort();
     window.speechSynthesis?.cancel();
+    isSpeakingRef.current = false;
     closeVoiceAI();
     setPhase('idle');
+    setMuted(false);
     setError(null);
   };
 
   if (!voiceAIOpen) return null;
-  const isActive   = phase === 'listening';
-  const isThinking = phase === 'thinking';
+
+  const isListening = phase === 'listening';
+  const isThinking  = phase === 'thinking';
+  const isSpeaking  = phase === 'speaking';
+
+  const statusText = muted ? 'MUTED'
+    : isListening ? 'LISTENING'
+    : isThinking  ? 'THINKING…'
+    : isSpeaking  ? 'SPEAKING…'
+    : 'TAP TO SPEAK';
 
   return (
     <div className="fixed inset-0 z-[500]"
       style={{ background: 'rgba(0,0,0,0.92)', backdropFilter: 'blur(20px)' }}>
+
+      {/* Ambient glow */}
       <div className="absolute inset-0 pointer-events-none overflow-hidden">
         <div className="absolute top-1/4 left-1/2 -translate-x-1/2 w-[500px] h-[500px] rounded-full blur-[120px] opacity-20 transition-all duration-1000"
-          style={{ background: isActive
+          style={{ background: isListening
             ? 'radial-gradient(circle, #4cd7f6, transparent)'
-            : isThinking
+            : isThinking || isSpeaking
             ? 'radial-gradient(circle, #ffb0cd, transparent)'
             : 'radial-gradient(circle, #d0bcff, transparent)' }}/>
       </div>
 
+      {/* Top bar */}
       <div className="absolute top-0 left-0 right-0 flex items-center justify-between px-6 h-16 z-10">
         <div className="flex items-center gap-2">
-          <div className="w-2 h-2 rounded-full animate-pulse" style={{ background: '#4cd7f6' }}/>
-          <span className="text-[11px] font-bold tracking-widest" style={{ color: '#4cd7f6', letterSpacing: '0.15em' }}>
-            {isActive ? 'LISTENING' : isThinking ? 'THINKING…' : 'VOICE AI'}
+          <div className="w-2 h-2 rounded-full animate-pulse"
+            style={{ background: isListening ? '#4cd7f6' : isSpeaking ? '#ffb0cd' : '#d0bcff' }}/>
+          <span className="text-[11px] font-bold tracking-widest"
+            style={{ color: isListening ? '#4cd7f6' : isSpeaking ? '#ffb0cd' : '#d0bcff', letterSpacing: '0.15em' }}>
+            {statusText}
           </span>
         </div>
         <button onClick={handleClose}
@@ -197,9 +316,10 @@ export default function VoiceAI({ context }) {
         </button>
       </div>
 
+      {/* Main orb */}
       <div className="absolute inset-0 flex flex-col items-center justify-center gap-8">
         <div className="relative flex items-center justify-center">
-          {isActive && (
+          {isListening && (
             <>
               <div className="absolute w-56 h-56 rounded-full border opacity-20 animate-ping"
                 style={{ borderColor: '#4cd7f6', animationDuration: '2s' }}/>
@@ -208,16 +328,15 @@ export default function VoiceAI({ context }) {
             </>
           )}
           <button
-            onClick={isActive ? stopListening : startListening}
-            disabled={isThinking}
-            className="relative w-44 h-44 rounded-full flex items-center justify-center transition-transform active:scale-95 disabled:opacity-60"
+            onClick={handleMuteToggle}
+            className="relative w-44 h-44 rounded-full flex items-center justify-center transition-transform active:scale-95"
             style={{
               background: 'rgba(20,20,20,0.8)',
               backdropFilter: 'blur(20px)',
               border: '1px solid rgba(255,255,255,0.1)',
-              boxShadow: isActive
+              boxShadow: isListening
                 ? '0 0 60px rgba(76,215,246,0.4), inset 0 0 40px rgba(76,215,246,0.1)'
-                : isThinking
+                : isThinking || isSpeaking
                 ? '0 0 60px rgba(255,176,205,0.3), inset 0 0 40px rgba(255,176,205,0.05)'
                 : '0 0 40px rgba(208,188,255,0.2), inset 0 0 30px rgba(208,188,255,0.05)',
             }}>
@@ -228,27 +347,31 @@ export default function VoiceAI({ context }) {
                 filter: 'blur(12px)',
               }}/>
             <div className="relative z-10 flex flex-col items-center gap-2">
-              {isThinking
-                ? <Sparkles size={28} style={{ color: '#ffb0cd' }} className="animate-pulse"/>
-                : isActive
-                ? <MicOff size={28} style={{ color: '#4cd7f6' }}/>
-                : <Mic size={28} style={{ color: '#d0bcff' }}/>}
-              <Waveform active={isActive}/>
+              {muted
+                ? <MicOff size={28} style={{ color: 'rgba(255,255,255,0.4)' }}/>
+                : isThinking || isSpeaking
+                  ? <Sparkles size={28} style={{ color: '#ffb0cd' }} className="animate-pulse"/>
+                  : isListening
+                  ? <Mic size={28} style={{ color: '#4cd7f6' }}/>
+                  : <Mic size={28} style={{ color: '#d0bcff' }}/>}
+              <Waveform active={isListening}/>
             </div>
           </button>
         </div>
 
-        <TranscriptBubble text={voiceTranscript}/>
+        {/* Live transcript */}
+        {voiceTranscript ? (
+          <div className="px-5 py-3 rounded-2xl text-center max-w-[80%]"
+            style={{ background: 'rgba(32,31,31,0.7)', backdropFilter: 'blur(20px)', border: '1px solid rgba(255,255,255,0.08)', color: '#e5e2e1', fontSize: 15, lineHeight: 1.5 }}>
+            {voiceTranscript}
+          </div>
+        ) : null}
 
+        {/* AI response */}
         {voiceResponse && (
           <div className="px-6 max-w-sm mx-auto w-full">
             <div className="px-5 py-4 rounded-2xl"
-              style={{
-                background: 'rgba(14,14,14,0.8)',
-                backdropFilter: 'blur(24px)',
-                border: '1px solid rgba(208,188,255,0.15)',
-                boxShadow: '0 0 30px rgba(208,188,255,0.1)',
-              }}>
+              style={{ background: 'rgba(14,14,14,0.8)', backdropFilter: 'blur(24px)', border: '1px solid rgba(208,188,255,0.15)', boxShadow: '0 0 30px rgba(208,188,255,0.1)' }}>
               <div className="flex items-center gap-2 mb-2">
                 <Sparkles size={12} style={{ color: '#d0bcff' }}/>
                 <span className="text-[10px] font-bold tracking-widest" style={{ color: '#d0bcff' }}>UNIFYAI</span>
@@ -260,14 +383,14 @@ export default function VoiceAI({ context }) {
 
         {error && <p className="text-[13px] px-6 text-center" style={{ color: '#ffb4ab' }}>{error}</p>}
 
-        {phase === 'idle' && !voiceTranscript && !voiceResponse && !error && (
-          <p className="text-[13px]" style={{ color: 'rgba(203,195,215,0.4)' }}>Tap the orb to speak</p>
-        )}
+        <p className="text-[11px]" style={{ color: 'rgba(203,195,215,0.35)' }}>
+          {muted ? 'Tap orb to unmute' : isListening ? 'Speak now…' : isSpeaking ? 'AI is responding…' : 'Tap orb to mute / unmute'}
+        </p>
       </div>
 
       <style>{`
-        @keyframes orb-spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
-        @keyframes wave-bar { from { transform: scaleY(0.4); } to { transform: scaleY(1.2); } }
+        @keyframes orb-spin  { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+        @keyframes wave-bar  { from { transform: scaleY(0.4); } to { transform: scaleY(1.2); } }
       `}</style>
     </div>
   );

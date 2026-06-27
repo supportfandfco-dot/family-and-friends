@@ -28,7 +28,6 @@ import UnifyAIOverlay from '../../ai/UnifyAIOverlay';
 import UnifyAIChatBar from '../../ai/UnifyAIChatBar';
 import UnifiedAnswerCard from '../../ai/UnifiedAnswerCard';
 import VoiceAI from '../../ai/VoiceAI';
-import AIVoiceSession from '../../livekit/AIVoiceSession';
 import MediaIntelligence from '../../ai/MediaIntelligence';
 import useAIStore from '../../ai/useAIStore';
 import { summarizeMessages, askUnify } from '../../ai/unifyService';
@@ -584,7 +583,6 @@ export default function ChatWindow({ chatPartner, onBack, onVoiceCall, onVideoCa
   const { openOverlay, openVoiceAI, voiceAIOpen, overlayOpen,
           unifiedAnswer, setUnifiedAnswer, clearUnifiedAnswer,
           getSummaryCache, setSummaryCache } = useAIStore();
-  const [showAIVoiceSession, setShowAIVoiceSession] = useState(false);
   const [showMediaAI, setShowMediaAI]       = useState(false);
   const [showGallery, setShowGallery]       = useState(false);
   const [mediaAIImage, setMediaAIImage]     = useState(null);
@@ -983,7 +981,7 @@ export default function ChatWindow({ chatPartner, onBack, onVoiceCall, onVideoCa
   });
 
   const handleOpenOverlay = () => openOverlay(getAIContext());
-  const handleOpenVoice   = () => setShowAIVoiceSession(true);
+  const handleOpenVoice   = () => openVoiceAI();
 
   const handleSummarize = async () => {
     setShowMenu(false);
@@ -1380,14 +1378,6 @@ export default function ChatWindow({ chatPartner, onBack, onVoiceCall, onVideoCa
       <UnifyAIOverlay />
       <VoiceAI />
 
-      {/* AI VOICE SESSION — LiveKit-powered */}
-      {showAIVoiceSession && user && (
-        <AIVoiceSession
-          user={user}
-          profile={profile}
-          onClose={() => setShowAIVoiceSession(false)}
-        />
-      )}
 
       {/* MEDIA AI SHEET */}
       {showMediaAI && mediaAIImage && (

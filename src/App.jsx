@@ -30,7 +30,6 @@ import Settings from './components/Settings/Settings';
 import CallScreen from './components/Calls/CallScreen';
 import GroupCallScreen from './components/Calls/GroupCallScreen';
 import MeetingRoom from './components/Calls/MeetingRoom';
-import AIVoiceSession from './livekit/AIVoiceSession';
 
 function AppInner() {
   const { user, profile, loading, isAuthenticated } = useAuth();
@@ -132,9 +131,6 @@ function AppInner() {
 
   const [incomingGroupCall, setIncomingGroupCall] = useState(null);
   const [gcMemberProfiles,  setGcMemberProfiles]  = useState({});
-
-  // ── AI Voice Session ────────────────────────────────────
-  const [showAIVoice, setShowAIVoice] = useState(false);
 
   // ── Global AI Auto-Pilot ─────────────────────────────
   useAIAutoPilot(user?.uid, profile);
@@ -614,14 +610,6 @@ function AppInner() {
         )}
       </div>
 
-      {/* AI Voice Session — independent LiveKit subsystem, zero impact on existing flows */}
-      {showAIVoice && user && (
-        <AIVoiceSession
-          user={user}
-          profile={profile}
-          onClose={() => setShowAIVoice(false)}
-        />
-      )}
     </>
   );
 }
