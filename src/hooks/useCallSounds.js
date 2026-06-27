@@ -25,12 +25,12 @@ function createRing(ctx) {
     if (stopped) return;
     const now = ctx.currentTime;
     const tones = [
-      { freq: 880, gain: 0.18, start: 0,    dur: 0.6 },
-      { freq: 659, gain: 0.14, start: 0.05, dur: 0.5 },
-      { freq: 523, gain: 0.10, start: 0.1,  dur: 0.45 },
-      { freq: 440, gain: 0.18, start: 0.35, dur: 0.7 },
-      { freq: 349, gain: 0.14, start: 0.40, dur: 0.6 },
-      { freq: 262, gain: 0.10, start: 0.45, dur: 0.55 },
+      { freq: 880, gain: 0.55, start: 0,    dur: 0.6 },
+      { freq: 659, gain: 0.45, start: 0.05, dur: 0.5 },
+      { freq: 523, gain: 0.35, start: 0.1,  dur: 0.45 },
+      { freq: 440, gain: 0.55, start: 0.35, dur: 0.7 },
+      { freq: 349, gain: 0.45, start: 0.40, dur: 0.6 },
+      { freq: 262, gain: 0.35, start: 0.45, dur: 0.55 },
     ];
     tones.forEach(({ freq, gain: gv, start, dur }) => {
       const osc = ctx.createOscillator();
@@ -73,8 +73,8 @@ function createCallingTone(ctx) {
     if (stopped) return;
     const now = ctx.currentTime;
     const pairs = [
-      { startFreq: 380, endFreq: 480, gain: 0.10, start: 0,    dur: 0.4 },
-      { startFreq: 460, endFreq: 560, gain: 0.08, start: 0.45, dur: 0.4 },
+      { startFreq: 380, endFreq: 480, gain: 0.40, start: 0,    dur: 0.4 },
+      { startFreq: 460, endFreq: 560, gain: 0.35, start: 0.45, dur: 0.4 },
     ];
     pairs.forEach(({ startFreq, endFreq, gain: gv, start, dur }) => {
       const osc = ctx.createOscillator();

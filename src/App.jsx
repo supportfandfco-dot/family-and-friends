@@ -79,25 +79,41 @@ function AppInner() {
 
   // ── Sound effects ─────────────────────────────────────────────
   const playSoundEffect = useCallback((type) => {
-    const settings = (() => { try { return JSON.parse(localStorage.getItem('ff_chat_settings')) || {}; } catch { return {}; } })();
-    if (settings.soundEffects === false) return;
     try {
-      const ctx = new (window.AudioContext || window.webkitAudioContext)();
-      const osc = ctx.createOscillator();
+      const settings = JSON.parse(localStorage.getItem('ff_chat_settings') || '{}');
+      if (settings.soundEffects === false) return;
+    } catch {}
+    try {
+      const ctx  = new (window.AudioContext || window.webkitAudioContext)();
       const gain = ctx.createGain();
-      osc.connect(gain);
       gain.connect(ctx.destination);
+
       if (type === 'send') {
-        osc.frequency.value = 880;
-        gain.gain.setValueAtTime(0.08, ctx.currentTime);
-        gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.12);
-        osc.start(); osc.stop(ctx.currentTime + 0.12);
+        // Two-tone "whoosh" — clearly audible
+        const o1 = ctx.createOscillator();
+        o1.type = 'sine';
+        o1.connect(gain);
+        o1.frequency.setValueAtTime(1200, ctx.currentTime);
+        o1.frequency.exponentialRampToValueAtTime(600, ctx.currentTime + 0.15);
+        gain.gain.setValueAtTime(0.35, ctx.currentTime);
+        gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.18);
+        o1.start(ctx.currentTime);
+        o1.stop(ctx.currentTime + 0.18);
+
       } else if (type === 'receive') {
-        osc.frequency.setValueAtTime(660, ctx.currentTime);
-        osc.frequency.setValueAtTime(880, ctx.currentTime + 0.07);
-        gain.gain.setValueAtTime(0.07, ctx.currentTime);
-        gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.15);
-        osc.start(); osc.stop(ctx.currentTime + 0.15);
+        // Two-note "ding" — clearly audible
+        const playNote = (freq, startAt, dur) => {
+          const o = ctx.createOscillator();
+          const g = ctx.createGain();
+          o.type = 'sine';
+          o.connect(g); g.connect(ctx.destination);
+          o.frequency.value = freq;
+          g.gain.setValueAtTime(0.4, startAt);
+          g.gain.exponentialRampToValueAtTime(0.001, startAt + dur);
+          o.start(startAt); o.stop(startAt + dur);
+        };
+        playNote(880, ctx.currentTime, 0.12);
+        playNote(1100, ctx.currentTime + 0.1, 0.15);
       }
     } catch {}
   }, []);

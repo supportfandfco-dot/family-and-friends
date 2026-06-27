@@ -2,6 +2,7 @@
 //  GroupVirtualList — Virtualized group message list
 // ═══════════════════════════════════════════════════════
 import { useState, useRef, useEffect, useCallback, useMemo, memo } from 'react';
+import { GroupMsgBubble } from './GroupMsgBubble';
 
 function estimateHeight(msg) {
   if (!msg || msg.type === 'system') return 36;
@@ -60,7 +61,6 @@ export default function GroupVirtualList({
   selectedMsgs, selectionMode, typingLabel, bottomRef,
   onLongPress, onReaction, onSelect, onImageClick,
   enterSelectionMode, toggleMsgSelect,
-  GroupMsgBubble,
 }) {
   const containerRef = useRef(null);
   const heightCache  = useRef(new Map());
@@ -152,10 +152,8 @@ export default function GroupVirtualList({
 
   const visibleRows = useMemo(() => rows.slice(startIdx, endIdx + 1), [rows, startIdx, endIdx]);
 
-  // GroupMsgBubble passed as prop to avoid circular import
-
   return (
-    <div className="flex-1 relative overflow-hidden flex flex-col">
+    <div className="flex-1 relative flex flex-col" style={{ minHeight: 0 }}>
       {showJump && (
         <button
           onClick={() => bottomRef?.current?.scrollIntoView({ behavior: 'smooth' })}
