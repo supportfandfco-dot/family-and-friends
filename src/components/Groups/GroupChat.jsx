@@ -28,6 +28,7 @@ import UnifyAIChatBar from '../../ai/UnifyAIChatBar';
 import UnifiedAnswerCard from '../../ai/UnifiedAnswerCard';
 import GroupVirtualList from './GroupVirtualList';
 import VoiceAI from '../../ai/VoiceAI';
+import AIVoiceSession from '../../livekit/AIVoiceSession';
 import MediaIntelligence from '../../ai/MediaIntelligence';
 import useAIStore from '../../ai/useAIStore';
 import { analyzeGroupPulse, summarizeMessages, askUnify } from '../../ai/unifyService';
@@ -853,6 +854,7 @@ export function GroupChatWindow({ group: initialGroup, onBack, contacts: propCon
   const [selectedMsgs, setSelectedMsgs]     = useState([]);
 
   // ── UnifyAI ────────────────────────────────────────────────
+  const [showGroupAIVoice, setShowGroupAIVoice] = useState(false);
   const { openOverlay, openVoiceAI, voiceAIOpen,
           unifiedAnswer, setUnifiedAnswer, clearUnifiedAnswer,
           groupPulse, setGroupPulse, clearGroupPulse,
@@ -1491,7 +1493,7 @@ export function GroupChatWindow({ group: initialGroup, onBack, contacts: propCon
             myName={profile?.name}
             onReply={r => setText(r)}
             onOpenOverlay={handleOpenGroupOverlay}
-            onOpenVoice={() => openVoiceAI()}
+            onOpenVoice={() => setShowGroupAIVoice(true)}
             context={{ groupId: group?.id }}
           />
         </div>
@@ -1633,6 +1635,13 @@ export function GroupChatWindow({ group: initialGroup, onBack, contacts: propCon
       {/* UNIFYAI OVERLAYS */}
       <UnifyAIOverlay />
       <VoiceAI />
+      {showGroupAIVoice && user && (
+        <AIVoiceSession
+          user={user}
+          profile={profile}
+          onClose={() => setShowGroupAIVoice(false)}
+        />
+      )}
     </div>
   );
 }

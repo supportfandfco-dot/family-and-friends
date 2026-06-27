@@ -61,6 +61,7 @@ export default function useAIVoicePipeline({ uid, profile, onTranscript, onAIRes
   const [transcript,    setTranscript]    = useState('');
   const [aiText,        setAiText]        = useState('');
   const [conversationHistory, setHistory] = useState([]);
+  const historyRef = useRef([]);
 
   const recognitionRef  = useRef(null);
   const vadCleanupRef   = useRef(null);
@@ -68,6 +69,11 @@ export default function useAIVoicePipeline({ uid, profile, onTranscript, onAIRes
   const streamRef       = useRef(null);
   const utteranceRef    = useRef(null);
   const interruptedRef  = useRef(false);
+
+  // Track active state in refs to avoid stale closures in recognition callbacks
+  const isListeningRef  = useRef(false);
+  const isProcessingRef = useRef(false);
+  const isSpeakingRef   = useRef(false);
 
   // ── Build Web Speech recogniser ──────────────────────
   const buildRecogniser = useCallback(() => {
@@ -95,6 +101,7 @@ export default function useAIVoicePipeline({ uid, profile, onTranscript, onAIRes
     return new Promise((resolve) => {
       window.speechSynthesis.cancel();
       interruptedRef.current = false;
+      isSpeakingRef.current = true;
       setIsSpeaking(true);
 
       // Chunk into sentences for streaming feel
@@ -134,10 +141,11 @@ export default function useAIVoicePipeline({ uid, profile, onTranscript, onAIRes
   // ── Route text to Multi-AI Router ───────────────────
   const routeToAIWithContext = useCallback(async (userText) => {
     if (!userText.trim()) return;
+    isProcessingRef.current = true;
     setIsProcessing(true);
 
     // Build conversation context for the AI router
-    const history = conversationHistory.map(m =>
+    const history = historyRef.current.map(m =>
       `${m.role === 'user' ? 'User' : 'AI'}: ${m.text}`
     ).join('\n');
 
@@ -162,11 +170,13 @@ export default function useAIVoicePipeline({ uid, profile, onTranscript, onAIRes
       onAIResponse?.(aiResponse);
 
       // Update conversation history
-      setHistory(prev => [
-        ...prev.slice(-20), // keep last 20 turns
+      const newHistory = [
+        ...historyRef.current.slice(-20),
         { role: 'user', text: userText },
         { role: 'ai',   text: aiResponse },
-      ]);
+      ];
+      historyRef.current = newHistory;
+      setHistory(newHistory);
 
       // Conversation Intelligence runs via onTranscript/onAIResponse callbacks
 
@@ -177,6 +187,7 @@ export default function useAIVoicePipeline({ uid, profile, onTranscript, onAIRes
       }
     }
 
+    isProcessingRef.current = false;
     setIsProcessing(false);
 
     // Speak the response
@@ -188,7 +199,7 @@ export default function useAIVoicePipeline({ uid, profile, onTranscript, onAIRes
     if (!abortRef.current?.signal.aborted) {
       recognitionRef.current?.start();
     }
-  }, [conversationHistory, profile, speak, onAIResponse, onInsight]);
+  }, [profile, speak, onAIResponse, onInsight]);
 
   // ── Start listening ──────────────────────────────────
   const startListening = useCallback(async (micStream) => {
@@ -227,8 +238,8 @@ export default function useAIVoicePipeline({ uid, profile, onTranscript, onAIRes
     };
 
     recognition.onend = () => {
-      // Restart unless we're processing or user stopped
-      if (isListening && !isProcessing && !isSpeaking) {
+      // Use refs — never stale, always current values
+      if (isListeningRef.current && !isProcessingRef.current && !isSpeakingRef.current) {
         try { recognition.start(); } catch {}
       }
     };
@@ -244,8 +255,9 @@ export default function useAIVoicePipeline({ uid, profile, onTranscript, onAIRes
     }
 
     recognition.start();
+    isListeningRef.current = true;
     setIsListening(true);
-  }, [buildRecogniser, routeToAIWithContext, interrupt, isListening, isProcessing, isSpeaking, onTranscript]);
+  }, [buildRecogniser, routeToAIWithContext, interrupt, onTranscript]);
 
   // ── Stop listening ───────────────────────────────────
   const stopListening = useCallback(() => {
@@ -254,6 +266,9 @@ export default function useAIVoicePipeline({ uid, profile, onTranscript, onAIRes
     vadCleanupRef.current = null;
     try { recognitionRef.current?.abort(); } catch {}
     recognitionRef.current = null;
+    isListeningRef.current = false;
+    isProcessingRef.current = false;
+    isSpeakingRef.current = false;
     setIsListening(false);
     setTranscript('');
     setAiText('');
@@ -278,6 +293,6 @@ export default function useAIVoicePipeline({ uid, profile, onTranscript, onAIRes
     startListening,
     stopListening,
     interrupt,
-    clearHistory: () => setHistory([]),
+    clearHistory: () => { historyRef.current = []; setHistory([]); },
   };
 }

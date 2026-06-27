@@ -3,7 +3,7 @@
 //  Connects LiveKit room + AI pipeline + live CI
 //  in a single, self-contained overlay.
 // ═══════════════════════════════════════════════════════
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { Mic, MicOff, X, Zap, Brain, CheckSquare, MessageSquare } from 'lucide-react';
 import useLiveKitRoom, { RoomStatus } from './useLiveKitRoom';
 import useAIVoicePipeline from './useAIVoicePipeline';
@@ -44,27 +44,43 @@ export default function AIVoiceSession({ user, profile, onClose }) {
   const ci = useConversationIntelligenceLive();
 
   const [muted,      setMutedState]  = useState(false);
+  const [micError,   setMicError]    = useState(null);
   const [activeTab,  setActiveTab]   = useState('chat'); // chat | insights
-  const micStreamRef = useRef(null);
+  const micStreamRef    = useRef(null);
+  const chatBottomRef   = useRef(null);
+  const hasSpeechSupport = useMemo(() =>
+    typeof window !== 'undefined' && !!(window.SpeechRecognition || window.webkitSpeechRecognition),
+  []);
+
+  // ── Auto-scroll conversation ────────────────────────
+  useEffect(() => {
+    chatBottomRef.current?.scrollIntoView({ behavior: 'smooth' });
+  }, [conversationHistory.length, isProcessing]);
 
   // ── Connect on mount ─────────────────────────────────
   useEffect(() => {
     const start = async () => {
-      // Get mic stream for VAD regardless of LiveKit config
+      // Request microphone permission upfront with user-friendly error
       try {
         micStreamRef.current = await navigator.mediaDevices.getUserMedia({
           audio: LIVEKIT_CONFIG.audioConstraints,
         });
-      } catch {
+      } catch (err) {
+        // Permission denied or no mic — still open UI, show error state
         micStreamRef.current = null;
+        if (err.name === 'NotAllowedError' || err.name === 'PermissionDeniedError') {
+          setMicError('Microphone access denied. Please allow mic access and try again.');
+          return;
+        }
       }
 
-      if (liveKitConfigured) {
+      // Connect to LiveKit room if configured (non-blocking — works without it)
+      if (liveKitConfigured && user?.uid) {
         const roomName = `${LIVEKIT_CONFIG.aiRoomPrefix}${user.uid}`;
-        await connect(roomName, user.uid, profile?.name || user.uid);
+        connect(roomName, user.uid, profile?.name || user.uid).catch(() => {});
       }
 
-      // Start AI voice pipeline (works with or without LiveKit)
+      // Auto-start AI pipeline immediately — no extra tap needed
       await startListening(micStreamRef.current);
     };
 
@@ -88,6 +104,7 @@ export default function AIVoiceSession({ user, profile, onClose }) {
 
   // ── Status label ─────────────────────────────────────
   const statusLabel = () => {
+    if (!hasSpeechSupport) return '⚠️ Browser STT not supported — use Chrome';
     if (muted)          return '🔇 Muted';
     if (isSpeaking)     return '🔊 AI is speaking…';
     if (isProcessing)   return '⚡ Thinking…';
@@ -133,6 +150,19 @@ export default function AIVoiceSession({ user, profile, onClose }) {
             <X size={18} className="text-[var(--text-secondary)]" />
           </button>
         </div>
+
+        {/* ── Mic error ───────────────────────────────── */}
+        {micError && (
+          <div className="mx-4 mb-2 px-4 py-3 rounded-2xl bg-red-500/10 border border-red-500/20 flex-shrink-0">
+            <p className="text-sm text-red-400 text-center">{micError}</p>
+            <button
+              onClick={() => { setMicError(null); }}
+              className="mt-2 w-full text-xs text-[var(--text-secondary)] hover:text-[var(--text-primary)]"
+            >
+              Dismiss
+            </button>
+          </div>
+        )}
 
         {/* ── Visualiser orb ──────────────────────────── */}
         <div className="flex justify-center py-4 flex-shrink-0">
@@ -192,9 +222,14 @@ export default function AIVoiceSession({ user, profile, onClose }) {
                 <div className="text-center text-[var(--text-secondary)] text-sm py-8">
                   <p className="text-2xl mb-2">🎤</p>
                   <p>Start speaking — I'm listening</p>
-                  {!liveKitConfigured && (
+                  {!hasSpeechSupport && (
+                    <p className="text-xs mt-2 text-red-400 font-medium">
+                      ⚠️ Voice recognition requires Chrome or Edge
+                    </p>
+                  )}
+                  {hasSpeechSupport && !liveKitConfigured && (
                     <p className="text-xs mt-2 opacity-60">
-                      LiveKit not configured — using browser STT/TTS
+                      Using browser voice — configure LiveKit for lower latency
                     </p>
                   )}
                 </div>
@@ -222,6 +257,7 @@ export default function AIVoiceSession({ user, profile, onClose }) {
                   </div>
                 </div>
               )}
+              <div ref={chatBottomRef} />
             </div>
           ) : (
             <div className="flex flex-col gap-4 py-1">
