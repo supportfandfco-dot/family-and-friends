@@ -118,12 +118,11 @@ export default function VoiceAI({ context }) {
   }, []);
 
   // ── Start recognition ───────────────────────────────────
+  const isProcessingRef = useRef(false);
+
   const startRecognition = useCallback(() => {
-    if (muted || isSpeakingRef.current || !isActiveRef.current) return;
+    if (muted || isSpeakingRef.current || isProcessingRef.current || !isActiveRef.current) return;
     try {
-      if (recognitionRef.current) {
-        try { recognitionRef.current.abort(); } catch {}
-      }
       const rec = buildRecognition();
       if (!rec) {
         setError('Speech recognition not supported. Use Chrome or Edge.');
@@ -132,7 +131,7 @@ export default function VoiceAI({ context }) {
       recognitionRef.current = rec;
       rec.start();
     } catch (e) {
-      setPhase('idle');
+      // Already started — ignore
     }
   }, [muted, buildRecognition]);
 
@@ -185,6 +184,7 @@ export default function VoiceAI({ context }) {
     if (!question?.trim()) { setPhase('idle'); return; }
 
     setPhase('thinking');
+    isProcessingRef.current = true;
     setVoiceTranscript('');
     setVoiceResponse('');
     abortRef.current?.abort();

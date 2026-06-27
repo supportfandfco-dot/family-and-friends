@@ -2,7 +2,7 @@
 //  VirtualMessageList — High-performance virtualized list
 //  Renders only visible messages. Handles 50k+ messages.
 // ═══════════════════════════════════════════════════════
-import { useRef, useEffect, useCallback, useState, memo } from 'react';
+import { useRef, useEffect, useState, memo } from 'react';
 import useVirtualMessages from '../../hooks/useVirtualMessages';
 import MessageBubble from './MessageBubble';
 
@@ -67,16 +67,24 @@ export default function VirtualMessageList({
     measureRow,
   } = useVirtualMessages(messages, containerRef);
 
-  // Scroll to bottom only when a NEW message arrives and user is near bottom
+  // Scroll: jump to bottom on first load; smooth scroll for new messages only
+  const initialScrollDone = useRef(false);
   useEffect(() => {
     const newCount = messages.length;
-    if (newCount > prevCountRef.current) {
+    if (newCount === 0) return;
+
+    if (!initialScrollDone.current) {
+      initialScrollDone.current = true;
+      // Instant jump to bottom on chat open — no animation
+      requestAnimationFrame(() => {
+        const el = containerRef.current;
+        if (el) el.scrollTop = el.scrollHeight;
+      });
+    } else if (newCount > prevCountRef.current) {
       const el = containerRef.current;
       const nearBottom = !el || (el.scrollHeight - el.scrollTop - el.clientHeight < 200);
       if (nearBottom) {
-        requestAnimationFrame(() => {
-          bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
-        });
+        requestAnimationFrame(() => bottomRef.current?.scrollIntoView({ behavior: 'smooth' }));
       }
     }
     prevCountRef.current = newCount;
@@ -99,11 +107,7 @@ export default function VirtualMessageList({
     else enterSelectionMode(msg);
   }, [selectionMode, toggleMsgSelect, enterSelectionMode]);
 
-  // Stable handler references to prevent child rerenders
-  const stableOnLongPress  = useCallback(onLongPress,  []);
-  const stableOnReaction   = useCallback(onReaction,   []);
-  const stableOnImageClick = useCallback(onImageClick, []);
-  const stableOnSwipeReply = useCallback(onSwipeReply, []);
+  // Pass props directly — parent already wraps in useCallback
 
   // Track whether user is near bottom to show jump button
   const [showJumpBtn, setShowJumpBtn] = useState(false);
@@ -131,7 +135,7 @@ export default function VirtualMessageList({
   }, []);
 
   return (
-    <div className="flex-1 relative overflow-hidden flex flex-col">
+    <div className="flex-1 relative flex flex-col" style={{ minHeight: 0 }}>
     {/* Jump to bottom button */}
     {showJumpBtn && (
       <button
@@ -146,13 +150,13 @@ export default function VirtualMessageList({
     )}
     <div
       ref={containerRef}
-      className="flex-1 overflow-y-auto px-4 virtual-scroll-container"
+      className="flex-1 overflow-y-auto px-4"
       style={{
-        scrollbarWidth: 'thin',
+        scrollbarWidth: 'none',
+        msOverflowStyle: 'none',
         WebkitOverflowScrolling: 'touch',
         overscrollBehavior: 'contain',
         scrollBehavior: 'auto',
-        contain: 'strict',
       }}
     >
       {/* Older messages loading indicator */}
@@ -215,10 +219,10 @@ export default function VirtualMessageList({
                     selected={selectedMsgs.some(m => m.id === row.msg.id)}
                     selectionMode={selectionMode}
                     onSelect={handleSelect}
-                    onLongPress={stableOnLongPress}
-                    onReaction={stableOnReaction}
-                    onSwipeReply={stableOnSwipeReply}
-                    onImageClick={stableOnImageClick}
+                    onLongPress={onLongPress}
+                    onReaction={onReaction}
+                    onSwipeReply={onSwipeReply}
+                    onImageClick={onImageClick}
                     chatPartner={chatPartner}
                   />
                 </div>

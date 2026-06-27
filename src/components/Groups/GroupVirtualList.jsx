@@ -60,6 +60,7 @@ export default function GroupVirtualList({
   selectedMsgs, selectionMode, typingLabel, bottomRef,
   onLongPress, onReaction, onSelect, onImageClick,
   enterSelectionMode, toggleMsgSelect,
+  GroupMsgBubble,
 }) {
   const containerRef = useRef(null);
   const heightCache  = useRef(new Map());
@@ -113,10 +114,18 @@ export default function GroupVirtualList({
     return () => { ro.disconnect(); el.removeEventListener('scroll', handleScroll); if (rafRef.current) cancelAnimationFrame(rafRef.current); };
   }, [handleScroll]);
 
-  // Smart scroll to bottom
+  // Scroll: instant jump to bottom on first load; smooth for new messages
+  const initialDone = useRef(false);
   useEffect(() => {
     const n = messages.length;
-    if (n > prevCount.current) {
+    if (n === 0) return;
+    if (!initialDone.current) {
+      initialDone.current = true;
+      requestAnimationFrame(() => {
+        const el = containerRef.current;
+        if (el) el.scrollTop = el.scrollHeight;
+      });
+    } else if (n > prevCount.current) {
       const el = containerRef.current;
       const near = !el || (el.scrollHeight - el.scrollTop - el.clientHeight < 200);
       if (near) requestAnimationFrame(() => bottomRef?.current?.scrollIntoView({ behavior: 'smooth' }));
@@ -143,13 +152,7 @@ export default function GroupVirtualList({
 
   const visibleRows = useMemo(() => rows.slice(startIdx, endIdx + 1), [rows, startIdx, endIdx]);
 
-  // Dynamic import of GroupMsgBubble to avoid circular dep
-  const [GroupMsgBubble, setGMB] = useState(null);
-  useEffect(() => {
-    import('./GroupChat').then(m => setGMB(() => m.GroupMsgBubble));
-  }, []);
-
-  if (!GroupMsgBubble) return <div className="flex-1 overflow-y-auto px-4" />;
+  // GroupMsgBubble passed as prop to avoid circular import
 
   return (
     <div className="flex-1 relative overflow-hidden flex flex-col">
@@ -163,7 +166,7 @@ export default function GroupVirtualList({
           </svg>
         </button>
       )}
-      <div ref={containerRef} className="flex-1 overflow-y-auto px-4" style={{ scrollbarWidth: 'thin', WebkitOverflowScrolling: 'touch' }}>
+      <div ref={containerRef} className="flex-1 overflow-y-auto px-4" style={{ scrollbarWidth: 'none', msOverflowStyle: 'none', WebkitOverflowScrolling: 'touch' }}>
         <div style={{ height: totalHeight, position: 'relative' }}>
           <div style={{ position: 'absolute', top: offsets[startIdx] || 0, left: 0, right: 0 }}>
             {visibleRows.map((row, i) => {

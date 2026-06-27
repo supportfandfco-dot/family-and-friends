@@ -1327,6 +1327,7 @@ export function GroupChatWindow({ group: initialGroup, onBack, contacts: propCon
         onImageClick={handleImageClick}
         enterSelectionMode={enterSelectionMode}
         toggleMsgSelect={toggleMsgSelect}
+        GroupMsgBubble={GroupMsgBubble}
       />
 
       {/* UNIFYAI — Summary / Answer Card */}

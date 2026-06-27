@@ -11,7 +11,7 @@ import { getAuth, RecaptchaVerifier, signInWithPhoneNumber,
   reauthenticateWithCredential
 } from 'firebase/auth';
 import {
-  getFirestore, initializeFirestore, persistentLocalCache, persistentMultipleTabManager,
+  getFirestore,
   collection, doc, setDoc, getDoc, getDocs,
   addDoc, updateDoc, deleteDoc, onSnapshot, query, where,
   orderBy, limit, startAfter, serverTimestamp, arrayUnion, arrayRemove,
@@ -35,18 +35,9 @@ const firebaseConfig = {
 const app  = initializeApp(firebaseConfig);
 const auth = getAuth(app);
 
-// Firestore with persistent cache — messages load offline, sync when back online
-let db;
-try {
-  db = initializeFirestore(app, {
-    localCache: persistentLocalCache({
-      tabManager: persistentMultipleTabManager(),
-    }),
-  });
-} catch {
-  // Fall back to default if persistence fails (e.g. incognito/private mode)
-  db = getFirestore(app);
-}
+// Firestore — use default initialization for reliable real-time updates
+// persistentMultipleTabManager caused secondary tabs to stop receiving updates
+const db = getFirestore(app);
 
 const storage = getStorage(app);
 const rtdb    = getDatabase(app);
