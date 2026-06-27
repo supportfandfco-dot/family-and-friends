@@ -5,7 +5,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import {
   Clock, CheckCircle2, MessageCircle, AlertCircle,
-  Calendar, Handshake, BrainCircuit, Zap, Activity,
+  Calendar, Handshake, BrainCircuit, Zap, Activity, Mic,
   ArrowRight, RefreshCw,
 } from 'lucide-react';
 import {
@@ -222,6 +222,20 @@ export default function CommandCenter({ chats, groups, user, onSelectChat, onSel
 
   return (
     <div className="p-5 animate-slide-up pb-24 overflow-y-auto h-full space-y-6">
+
+      {/* ── AI VOICE ─────────────────────────────────────────────── */}
+      <button
+        onClick={() => window.openAIVoice?.()}
+        className="w-full flex items-center gap-3 px-4 py-3 rounded-2xl bg-gradient-to-r from-brand-500/10 to-purple-500/10 border border-brand-500/20 hover:border-brand-500/40 transition-all group"
+      >
+        <div className="w-9 h-9 rounded-xl bg-gradient-to-br from-brand-500 to-purple-600 flex items-center justify-center flex-shrink-0 shadow-sm group-hover:scale-105 transition-transform">
+          <Mic size={16} className="text-white" />
+        </div>
+        <div className="text-left">
+          <p className="text-sm font-bold text-[var(--text-primary)]">AI Voice</p>
+          <p className="text-xs text-[var(--text-secondary)]">Talk to your AI assistant</p>
+        </div>
+      </button>
 
       {/* ── KPI CARDS ──────────────────────────────────────────── */}
       <div className="grid grid-cols-2 gap-3">
