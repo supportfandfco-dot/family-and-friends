@@ -102,16 +102,17 @@ export default function AIVoiceSession({ user, profile, onClose }) {
     if (next) interrupt();
   }, [muted, setMuted, interrupt, liveKitConfigured]);
 
-  // ── Status label ─────────────────────────────────────
+  // ── Status label — every pipeline stage visible ──────
   const statusLabel = () => {
-    if (!hasSpeechSupport) return '⚠️ Browser STT not supported — use Chrome';
-    if (muted)          return '🔇 Muted';
-    if (isSpeaking)     return '🔊 AI is speaking…';
+    if (!hasSpeechSupport) return '⚠️ Use Chrome or Edge for voice';
+    if (muted)          return '🔇 Muted — tap mic to unmute';
+    if (isSpeaking)     return '🔊 AI speaking — tap mic to interrupt';
     if (isProcessing)   return '⚡ Thinking…';
-    if (isListening)    return '🎤 Listening…';
+    if (transcript)     return `📝 "${transcript.slice(0, 30)}${transcript.length > 30 ? '…' : ''}"`;
+    if (isListening)    return '🎤 Listening — speak now';
     if (roomStatus === RoomStatus.CONNECTING)   return '⟳ Connecting…';
     if (roomStatus === RoomStatus.RECONNECTING) return '↻ Reconnecting…';
-    return '⏸ Paused';
+    return '⏸ Starting…';
   };
 
   return (
