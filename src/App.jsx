@@ -25,6 +25,7 @@ import PhoneAuth from './components/Auth/PhoneAuth';
 import ChatList from './components/Chat/ChatList';
 import AddContact from './components/Contacts/AddContact';
 import ChatWindow from './components/Chat/ChatWindow';
+import ErrorBoundary from './components/ErrorBoundary';
 import { GroupChatWindow } from './components/Groups/GroupChat';
 import Settings from './components/Settings/Settings';
 import CallScreen from './components/Calls/CallScreen';
@@ -475,16 +476,19 @@ function AppInner() {
   const mainContent = showSettings ? (
     <Settings onBack={handleBack} />
   ) : activeChat?.type === 'chat' ? (
-    <ChatWindow
-      key={activeChat.id}
-      chatPartner={activeChat.data}
-      onBack={handleBack}
-      onVoiceCall={handleVoiceCall}
-      onVideoCall={handleVideoCall}
-      onOpenSettings={handleOpenSettings}
-      onSoundEffect={playSoundEffect}
-    />
+    <ErrorBoundary onReset={handleBack}>
+      <ChatWindow
+        key={activeChat.id}
+        chatPartner={activeChat.data}
+        onBack={handleBack}
+        onVoiceCall={handleVoiceCall}
+        onVideoCall={handleVideoCall}
+        onOpenSettings={handleOpenSettings}
+        onSoundEffect={playSoundEffect}
+      />
+    </ErrorBoundary>
   ) : activeChat?.type === 'group' ? (
+    <ErrorBoundary onReset={handleBack}>
     <GroupChatWindow
       key={activeChat.id}
       group={activeChat.data}
@@ -495,7 +499,7 @@ function AppInner() {
         // Add current user's own profile so their tile shows correctly
         setGcMemberProfiles({ ...profiles, [user?.uid]: profile });
       }}
-    />
+    /></ErrorBoundary>
   ) : (
     <div className="hidden lg:flex flex-col items-center justify-center h-full" style={{ background: 'var(--chat-bg)' }}>
       <div className="text-center space-y-2 px-8 py-6 rounded-3xl"

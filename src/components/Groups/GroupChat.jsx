@@ -896,16 +896,7 @@ export function GroupChatWindow({ group: initialGroup, onBack, contacts: propCon
   }, [group?.id, memberProfiles]);
 
   // Smart scroll: only auto-scroll when a NEW message arrives AND user is near the bottom
-  const prevGroupMsgCountRef = useRef(0);
-  useEffect(() => {
-    const newCount = messages.length;
-    if (newCount > prevGroupMsgCountRef.current) {
-      const container = bottomRef.current?.parentElement;
-      const nearBottom = !container || (container.scrollHeight - container.scrollTop - container.clientHeight < 200);
-      if (nearBottom) bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
-    }
-    prevGroupMsgCountRef.current = newCount;
-  }, [messages]);
+  // Scroll handled by GroupVirtualList internally
 
   const handleTextChange = val => {
     setText(val);
