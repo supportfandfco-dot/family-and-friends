@@ -1314,7 +1314,7 @@ export default function ChatWindow({ chatPartner, onBack, onVoiceCall, onVideoCa
 
             {/* Send / Mic */}
             {text.trim() ? (
-              <button onClick={handleSend} disabled={sending || isBlocking}
+              <button onClick={handleSend} disabled={isBlocking}
                 className="w-10 h-10 rounded-full bg-brand-500 hover:bg-brand-600 flex items-center justify-center transition-all flex-shrink-0 shadow-lg shadow-brand-900/20 active:scale-95 disabled:opacity-50">
                 <Send size={18} className="text-white"/>
               </button>
