@@ -80,7 +80,7 @@ const LOG_STATUS_STYLE = {
 
 // ── Component ─────────────────────────────────────────────────
 export default function AIHubTab() {
-  const { profile, updateProfile } = useAuth();
+  const { profile, updateProfile, user } = useAuth();
 
   // Settings state
   const [agentMode, setAgentMode]             = useState('disabled');
@@ -151,7 +151,7 @@ export default function AIHubTab() {
   const handleApprove = async (log) => {
     try {
       await sendMessage(log.chatId, log.senderId, log.replyText, 'text');
-      await updateDoc(doc(db, 'users', auth.currentUser.uid, 'agentLogs', log.id), {
+      await updateDoc(doc(db, 'users', user.uid, 'agentLogs', log.id), {
         status: 'approved',
         approvedAt: serverTimestamp(),
       });
@@ -163,7 +163,7 @@ export default function AIHubTab() {
 
   const handleReject = async (id) => {
     try {
-      await updateDoc(doc(db, 'users', auth.currentUser.uid, 'agentLogs', id), {
+      await updateDoc(doc(db, 'users', user.uid, 'agentLogs', id), {
         status: 'rejected',
       });
     } catch {

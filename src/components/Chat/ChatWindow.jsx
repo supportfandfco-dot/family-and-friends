@@ -33,7 +33,6 @@ import useAIStore from '../../ai/useAIStore';
 import { summarizeMessages, askUnify } from '../../ai/unifyService';
 import MediaGallery from './MediaGallery';
 import VirtualMessageList from './VirtualMessageList';
-import MessageBubble from './MessageBubble';
 import useMessageSearch from '../../hooks/useMessageSearch';
 
 // ── Emoji data ─────────────────────────────────────────
@@ -596,7 +595,7 @@ export default function ChatWindow({ chatPartner, onBack, onVoiceCall, onVideoCa
     if (!user || !chatPartner) return;
     getOrCreateChat(user.uid, chatPartner.id)
       .then(id => setChatId(id))
-      .catch(e => { console.error('getOrCreateChat failed:', e); toast.error('Could not open chat'); });
+      .catch(() => toast.error('Could not open chat'));
     setOnline(user.uid).catch(()=>{});
   }, [user, chatPartner?.id]);
 

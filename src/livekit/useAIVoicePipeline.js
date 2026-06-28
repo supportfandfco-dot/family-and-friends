@@ -42,12 +42,13 @@ async function callGroqDirect(prompt, systemPrompt, signal) {
   return data?.choices?.[0]?.message?.content?.trim() || null;
 }
 
-// ── Structured logger — every stage visible in DevTools ─
+// Structured logger — kept for debugging, no-op in production if needed
 const log = (stage, msg, data) => {
-  const prefix = `%c[VOICE:${stage}]`;
-  const style  = 'color:#7c3aed;font-weight:bold';
-  if (data !== undefined) console.info(prefix, style, msg, data);
-  else                    console.info(prefix, style, msg);
+  if (import.meta.env.DEV) {
+    const style = 'color:#7c3aed;font-weight:bold';
+    if (data !== undefined) console.info(`%c[VOICE:${stage}]`, style, msg, data);
+    else                    console.info(`%c[VOICE:${stage}]`, style, msg);
+  }
 };
 
 // ── Load TTS voices (async — must wait for onvoiceschanged) ──

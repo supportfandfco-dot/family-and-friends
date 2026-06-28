@@ -108,7 +108,7 @@ export default function TasksTab({ chats, groups, user, onSelectChat, onSelectGr
       const gData = await res.json();
       
       // Update local task with googleTaskId
-      await updateDoc(doc(db, 'users', auth.currentUser.uid, 'tasks', task.id), {
+      await updateDoc(doc(db, 'users', user.uid, 'tasks', task.id), {
         googleTaskId: gData.id
       });
       

@@ -55,7 +55,7 @@ function AIHubPanel({ chats, groups, user, onSelectChat, onSelectGroup }) {
         </div>
       )}
       {aiTab === 'tasks' && (
-        <div className="flex-1 overflow-y-auto"><TasksTab /></div>
+        <div className="flex-1 overflow-y-auto"><TasksTab user={user} chats={chats} groups={groups} onSelectChat={onSelectChat} onSelectGroup={onSelectGroup} /></div>
       )}
       {aiTab === 'agent' && (
         <div className="flex-1 overflow-hidden"><AIHubTab /></div>

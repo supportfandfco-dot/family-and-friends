@@ -693,7 +693,7 @@ export async function createGroupCall(groupId, groupName, initiatorId, initiator
       createdAt: serverTimestamp(),
     });
     return ref.id;
-  } catch (e) { console.error('createGroupCall:', e); throw e; }
+  } catch (e) { throw e; }
 }
 
 // ── Deterministic-ID variant for Meeting Rooms ────────────────
@@ -715,7 +715,7 @@ export async function createGroupCallWithId(callId, groupName, initiatorId, init
       createdAt: serverTimestamp(),
     }, { merge: true });
     return callId;
-  } catch (e) { console.error('createGroupCallWithId:', e); throw e; }
+  } catch (e) { throw e; }
 }
 
 export async function joinGroupCallDoc(callId, uid) {

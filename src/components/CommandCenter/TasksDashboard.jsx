@@ -1,16 +1,18 @@
+import { useAuth } from '../../contexts/AuthContext';
 import React, { useState, useEffect } from 'react';
-import { db, auth, toggleFFTask, deleteFFTask } from '../../firebase';
+import { db, toggleFFTask, deleteFFTask } from '../../firebase';
 import { collection, query, orderBy, onSnapshot } from 'firebase/firestore';
 import { Check, Circle, Trash2, Calendar, Link } from 'lucide-react';
 import toast from 'react-hot-toast';
 
 export default function TasksDashboard({ onOpenChat }) {
+  const { user } = useAuth();
   const [tasks, setTasks] = useState([]);
 
   useEffect(() => {
-    if (!auth.currentUser) return;
+    if (!user?.uid) return;
     const q = query(
-      collection(db, 'users', auth.currentUser.uid, 'tasks'),
+      collection(db, 'users', user.uid, 'tasks'),
       orderBy('createdAt', 'desc')
     );
     const unsub = onSnapshot(q, (snap) => {

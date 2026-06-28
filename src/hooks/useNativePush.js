@@ -16,7 +16,7 @@ async function saveToken(uid, token) {
       fcmUpdatedAt: serverTimestamp(),
     });
   } catch (e) {
-    console.warn('Failed to save token:', e);
+    // FCM token save failed — non-critical
   }
 }
 

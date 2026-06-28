@@ -117,12 +117,12 @@ export function useCallSounds() {
 
   const startRing = () => {
     stopSounds();
-    try { stopRef.current = createRing(getCtx()); } catch (e) { console.warn('Ring error:', e); }
+    try { stopRef.current = createRing(getCtx()); } catch {}
   };
 
   const startCalling = () => {
     stopSounds();
-    try { stopRef.current = createCallingTone(getCtx()); } catch (e) { console.warn('Calling error:', e); }
+    try { stopRef.current = createCallingTone(getCtx()); } catch {}
   };
 
   useEffect(() => () => stopSounds(), []);

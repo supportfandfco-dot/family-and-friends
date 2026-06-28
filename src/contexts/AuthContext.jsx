@@ -133,7 +133,7 @@ export function AuthProvider({ children }) {
     try {
       await setDoc(doc(db, 'users', uid), profileData);
     } catch (e) {
-      console.error('setDoc error:', e.code, e.message);
+      // setDoc error — handled by retry
       throw e;
     }
     setProfile({ id: uid, ...profileData });

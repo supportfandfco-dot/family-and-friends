@@ -133,7 +133,7 @@ export async function analyzeGroupPulse(messages, groupName) {
     setCache(cacheKey, JSON.stringify(filtered), 'pulse2');
     return mergeLocalAndGroq(local, filtered);
   } catch (e) {
-    console.warn('Group pulse Groq failed, using local:', e.message);
+    // Group pulse Groq failed — using local fallback
     return local;
   }
 }
@@ -371,7 +371,7 @@ export async function generateCommandCenterInsights(chats, groups, myUid) {
     try {
       data = JSON.parse(clean);
     } catch (parseError) {
-      console.error("JSON Parse Error, trying to fix common errors. Raw text:", clean);
+      // JSON parse error in command center gen
       // Try to remove trailing commas before closing braces/brackets
       clean = clean.replace(/,\s*([\}\]])/g, '$1');
       // Fix unescaped line breaks in values by replacing structural line breaks with space? No, let's just attempt to parse again.
@@ -394,7 +394,7 @@ export async function generateCommandCenterInsights(chats, groups, myUid) {
     setCache(promptText, JSON.stringify(data), 'cmdcenter', 1000 * 60 * 5); // 5 min cache
     return data;
   } catch (err) {
-    console.error("Command Center Gen Error: ", err);
+    // Command Center gen error
     return {
       unreadCount: 0, waitingCount: 0, tasksCount: 0, updatesCount: 0,
       awayUpdates: [], waiting: [], tasks: [], timeline: []

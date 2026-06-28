@@ -58,7 +58,7 @@ export default function MusicPicker({ onSelect, onClose, momentDuration = 30 }) 
       const q = CATEGORIES.find(c => c.id === cat)?.query ?? null;
       setTracks(await fetchTracks(q));
     } catch (e) {
-      console.error('[MusicPicker] Load failed:', e); setError(`Could not load songs. Error: ${e.message}. Open DevTools console for details.`);
+      // MusicPicker load failed setError(`Could not load songs. Error: ${e.message}. Open DevTools console for details.`);
     }
     setLoading(false);
   }, []);
