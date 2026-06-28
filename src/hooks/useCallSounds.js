@@ -5,11 +5,13 @@
 import { useRef, useEffect } from 'react';
 
 let _ctx = null;
-const getCtx = () => {
+const getCtx = async () => {
   if (!_ctx || _ctx.state === 'closed') {
     _ctx = new (window.AudioContext || window.webkitAudioContext)();
   }
-  if (_ctx.state === 'suspended') _ctx.resume();
+  if (_ctx.state === 'suspended') {
+    try { await _ctx.resume(); } catch {}
+  }
   return _ctx;
 };
 
@@ -48,8 +50,13 @@ function createRing(ctx) {
     });
   };
 
-  playChord();
-  const id = setInterval(playChord, 2800);
+  // Resume context before each play (mobile Safari requires this)
+  const playChordSafe = async () => {
+    if (_ctx?.state === 'suspended') { try { await _ctx.resume(); } catch {} }
+    playChord();
+  };
+  playChordSafe();
+  const id = setInterval(playChordSafe, 2800);
 
   return () => {
     stopped = true;
@@ -94,8 +101,12 @@ function createCallingTone(ctx) {
     });
   };
 
-  playPulse();
-  const id = setInterval(playPulse, 1600);
+  const playPulseSafe = async () => {
+    if (_ctx?.state === 'suspended') { try { await _ctx.resume(); } catch {} }
+    playPulse();
+  };
+  playPulseSafe();
+  const id = setInterval(playPulseSafe, 1600);
 
   return () => {
     stopped = true;
@@ -115,14 +126,20 @@ export function useCallSounds() {
     if (stopRef.current) { stopRef.current(); stopRef.current = null; }
   };
 
-  const startRing = () => {
+  const startRing = async () => {
     stopSounds();
-    try { stopRef.current = createRing(getCtx()); } catch {}
+    try {
+      const ctx = await getCtx();
+      stopRef.current = createRing(ctx);
+    } catch {}
   };
 
-  const startCalling = () => {
+  const startCalling = async () => {
     stopSounds();
-    try { stopRef.current = createCallingTone(getCtx()); } catch {}
+    try {
+      const ctx = await getCtx();
+      stopRef.current = createCallingTone(ctx);
+    } catch {}
   };
 
   useEffect(() => () => stopSounds(), []);

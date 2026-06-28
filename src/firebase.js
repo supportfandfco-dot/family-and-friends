@@ -44,49 +44,126 @@ const rtdb    = getDatabase(app);
 
 // ── Presence system ────────────────────────────────────────────
 export function setupPresence(uid) {
-  const userStatusDbRef = dbRef(rtdb, `/status/${uid}`);
-  const connRef         = dbRef(rtdb, '.info/connected');
-
-  const unsub = onValue(connRef, async snapshot => {
-    if (!snapshot.val()) return; // not connected to RTDB
+  // Primary: Firestore (reliable, no RTDB rules needed)
+  // Secondary: RTDB (real-time, but requires correct rules)
+  const markOnline = async () => {
     try {
-      // Set offline handler first — runs server-side on disconnect
-      await onDisconnect(userStatusDbRef).set({
-        state: 'offline',
-        last_changed: dbTimestamp(),
-      });
-      // Then mark online
-      await set(userStatusDbRef, {
-        state: 'online',
-        last_changed: dbTimestamp(),
-      });
-    } catch {
-      // RTDB permission error — presence unavailable, non-fatal
-    }
-  });
-
-  // Also handle tab visibility changes
-  const handleVisibility = async () => {
-    try {
-      await set(userStatusDbRef, {
-        state: document.visibilityState === 'visible' ? 'online' : 'offline',
-        last_changed: dbTimestamp(),
+      await updateDoc(doc(db, 'users', uid), {
+        isOnline:  true,
+        lastSeen:  serverTimestamp(),
       });
     } catch {}
+    // Also try RTDB
+    try {
+      const r = dbRef(rtdb, `/status/${uid}`);
+      await onDisconnect(r).set({ state: 'offline', last_changed: dbTimestamp() });
+      await set(r, { state: 'online', last_changed: dbTimestamp() });
+    } catch {}
+  };
+
+  const markOffline = async () => {
+    try {
+      await updateDoc(doc(db, 'users', uid), {
+        isOnline: false,
+        lastSeen: serverTimestamp(),
+      });
+    } catch {}
+    try {
+      await set(dbRef(rtdb, `/status/${uid}`), { state: 'offline', last_changed: dbTimestamp() });
+    } catch {}
+  };
+
+  // Mark online immediately
+  markOnline();
+
+  // Handle tab visibility
+  const handleVisibility = () => {
+    if (document.visibilityState === 'visible') markOnline();
+    else markOffline();
   };
   document.addEventListener('visibilitychange', handleVisibility);
 
-  // Return cleanup function
+  // RTDB connected state (bonus real-time signal)
+  let rtdbUnsub = () => {};
+  try {
+    rtdbUnsub = onValue(dbRef(rtdb, '.info/connected'), snap => {
+      if (snap.val()) markOnline();
+    });
+  } catch {}
+
   return () => {
-    unsub();
     document.removeEventListener('visibilitychange', handleVisibility);
-    set(userStatusDbRef, { state: 'offline', last_changed: dbTimestamp() }).catch(() => {});
+    rtdbUnsub();
+    markOffline();
   };
 }
 
 export function subscribeToPresence(uid, callback) {
-  const r = dbRef(rtdb, `/status/${uid}`);
-  return onValue(r, snap => callback(snap.val()));
+  // Primary: Firestore isOnline field (always works)
+  // Secondary: RTDB for sub-second updates (if rules allow)
+  let fsUnsub = null;
+  let rtdbUnsub = () => {};
+
+  // Firestore subscription — primary and reliable
+  try {
+    fsUnsub = onSnapshot(doc(db, 'users', uid), snap => {
+      const d = snap.data();
+      if (d !== undefined) {
+        const status = { state: d?.isOnline ? 'online' : 'offline', last_changed: d?.lastSeen };
+        callback(status);
+      }
+    });
+  } catch {}
+
+  // RTDB subscription — bonus real-time signal (may be blocked by rules)
+  try {
+    rtdbUnsub = onValue(dbRef(rtdb, `/status/${uid}`), snap => {
+      const val = snap.val();
+      if (val?.state) callback(val);
+    });
+  } catch {}
+
+  return () => {
+    try { fsUnsub?.(); } catch {}
+    try { rtdbUnsub?.(); } catch {}
+  };
+}
+
+function _subscribeToPresenceLegacy(uid, callback) {
+  let rtdbValue = null;
+  let firestoreValue = null;
+  let rtdbUnsub = null;
+  let fsUnsub = null;
+
+  const resolve = () => {
+    if (rtdbValue !== null) {
+      callback(rtdbValue);
+    } else if (firestoreValue !== null) {
+      callback(firestoreValue);
+    }
+  };
+
+  try {
+    rtdbUnsub = onValue(dbRef(rtdb, `/status/${uid}`), snap => {
+      rtdbValue = snap.val();
+      resolve();
+    });
+  } catch {}
+
+  try {
+    fsUnsub = onSnapshot(doc(db, 'users', uid), snap => {
+      const d = snap.data();
+      if (d) {
+        firestoreValue = { state: d.isOnline ? 'online' : 'offline', last_changed: d.lastSeen };
+        resolve();
+      }
+    });
+  } catch {}
+
+  return () => {
+    try { rtdbUnsub?.(); } catch {}
+    try { fsUnsub?.(); } catch {}
+  };
 }
 
 // ── User helpers ───────────────────────────────────────────────
@@ -742,6 +819,17 @@ export function subscribeToIncomingGroupCalls(uid, callback) {
     if (!snap.empty) callback({ id: snap.docs[0].id, ...snap.docs[0].data() });
     else callback(null);
   });
+}
+
+// ── Save call log entry ────────────────────────────────────────
+// Called when a call ends to persist history for both participants
+export async function saveCallLog(uid, log) {
+  try {
+    await addDoc(collection(db, 'users', uid, 'callLogs'), {
+      ...log,
+      timestamp: serverTimestamp(),
+    });
+  } catch {}
 }
 
 export function subscribeToGroupCallDoc(callId, callback) {

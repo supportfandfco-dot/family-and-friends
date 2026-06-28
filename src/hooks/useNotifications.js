@@ -35,6 +35,28 @@ export function showLocalNotification({ title, body, tag, data = {}, onClick }) 
   setTimeout(() => n.close(), 6000);
 }
 
+// ── Notification sound ───────────────────────────────
+function playNotificationSound() {
+  try {
+    const ctx  = new (window.AudioContext || window.webkitAudioContext)();
+    const gain = ctx.createGain();
+    gain.connect(ctx.destination);
+    // Two-tone ding — clearly audible notification sound
+    const playNote = (freq, t, dur, vol = 0.45) => {
+      const o = ctx.createOscillator();
+      const g = ctx.createGain();
+      o.type = 'sine';
+      o.connect(g); g.connect(ctx.destination);
+      o.frequency.value = freq;
+      g.gain.setValueAtTime(vol, t);
+      g.gain.exponentialRampToValueAtTime(0.001, t + dur);
+      o.start(t); o.stop(t + dur);
+    };
+    playNote(1047, ctx.currentTime,        0.18);
+    playNote(1319, ctx.currentTime + 0.14, 0.22);
+  } catch {}
+}
+
 // ── Main hook ─────────────────────────────────────────
 export function useNotifications(uid, { onOpenChat, onOpenGroup, onOpenCall } = {}) {
   const unsubRef = useRef(null);
@@ -56,6 +78,9 @@ export function useNotifications(uid, { onOpenChat, onOpenGroup, onOpenCall } = 
 
       // For calls, don't show a local notification — the in-app call screen handles it
       if (isCall) return;
+
+      // Play notification sound
+      playNotificationSound();
 
       showLocalNotification({
         title: title || 'Family & Friends',

@@ -229,7 +229,16 @@ export function useGroupWebRTC(currentUserId) {
     if (callDocUnsubRef.current) { callDocUnsubRef.current(); }
     callDocUnsubRef.current = subscribeToGroupCallDoc(cid, (data) => {
       if (!data || data.status === 'ended') { cleanup(); return; }
-      setGcParticipants(data.participants || []);
+      const parts = data.participants || [];
+      setGcParticipants(parts);
+      // Immediately promote to 'active' when 2+ participants present
+      // (don't wait for the separate useEffect to fire)
+      if (parts.length >= 2) {
+        setGcStatus('active');
+        if (!timerRef.current) {
+          timerRef.current = setInterval(() => setCallDuration(d => d + 1), 1000);
+        }
+      }
     });
   }, [cleanup]);
 

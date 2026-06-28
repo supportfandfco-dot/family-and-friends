@@ -212,7 +212,18 @@ export function useWebRTC(currentUserId) {
 
       if (['failed', 'closed'].includes(state)) {
         const cid = callIdRef.current;
-        if (cid) updateDoc(doc(db, 'calls', cid), { status: 'ended' }).catch(() => {});
+        if (cid) {
+          updateDoc(doc(db, 'calls', cid), { status: 'ended' }).catch(() => {});
+          // Save call log for both participants
+          // Save call log — use timerRef's tick count as duration proxy
+          const logEntry = {
+            type:      callType || 'voice',
+            status:    callDuration > 3 ? 'completed' : 'missed',
+            duration:  callDuration,
+            remoteUid: remoteUserId || null,
+          };
+          if (currentUserId) saveCallLog(currentUserId, logEntry).catch(() => {});
+        }
         cleanup();
       }
     };

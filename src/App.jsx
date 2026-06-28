@@ -532,15 +532,18 @@ function AppInner() {
           isHost={activeMeeting.isHost}
           onStartCall={async () => {
             const meetingName = `Meeting ${activeMeeting.code}`;
+            const allowed = await checkMediaPermission(true);
+            if (!allowed) return;
+            // Close MeetingRoom first — GroupCallScreen renders while WebRTC negotiates
+            const code  = activeMeeting.code;
+            const isHst = activeMeeting.isHost;
+            setActiveMeeting(null);
             try {
-              const allowed = await checkMediaPermission(true);
-              if (!allowed) return;
-              if (activeMeeting.isHost) {
-                await startMeetingCall(activeMeeting.code, meetingName, profile?.name, 'video');
+              if (isHst) {
+                await startMeetingCall(code, meetingName, profile?.name, 'video');
               } else {
-                await joinMeetingCall(activeMeeting.code, meetingName, 'video');
+                await joinMeetingCall(code, meetingName, 'video');
               }
-              setActiveMeeting(null);
             } catch (err) {
               toast.error(err.message || 'Could not join meeting video feed.');
             }
