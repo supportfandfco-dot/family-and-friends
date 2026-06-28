@@ -590,14 +590,31 @@ export default function ChatWindow({ chatPartner, onBack, onVoiceCall, onVideoCa
   const inputRef    = useRef(null);
   const typingTimer = useRef(null);
 
-  // Init chat
+  // Reset all per-chat state when switching to a different chat
+  useEffect(() => {
+    setChatId(null);
+    setMessages([]);
+    setOlderMsgs([]);
+    setLoadingOlder(false);
+    setHasMore(true);
+    oldestDocRef.current = null;
+    setReplyTo(null);
+    setEditingMsg(null);
+    setEditText('');
+    setSelectedMsgs([]);
+    setSelectionMode(false);
+    setPartnerTyping(false);
+    setIsOnline(false);
+  }, [chatPartner?.id]);
+
+  // Init chat — get or create the chatId
   useEffect(() => {
     if (!user || !chatPartner) return;
     getOrCreateChat(user.uid, chatPartner.id)
       .then(id => setChatId(id))
       .catch(() => toast.error('Could not open chat'));
     setOnline(user.uid).catch(()=>{});
-  }, [user, chatPartner?.id]);
+  }, [user?.uid, chatPartner?.id]);
 
   // Load block status — only watch MY own blocked list
   // We intentionally do NOT subscribe to the other person's blocked list —

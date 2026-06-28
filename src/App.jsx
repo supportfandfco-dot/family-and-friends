@@ -476,6 +476,7 @@ function AppInner() {
     <Settings onBack={handleBack} />
   ) : activeChat?.type === 'chat' ? (
     <ChatWindow
+      key={activeChat.id}
       chatPartner={activeChat.data}
       onBack={handleBack}
       onVoiceCall={handleVoiceCall}
@@ -485,6 +486,7 @@ function AppInner() {
     />
   ) : activeChat?.type === 'group' ? (
     <GroupChatWindow
+      key={activeChat.id}
       group={activeChat.data}
       onBack={handleBack}
       onGroupVoiceCall={handleGroupVoiceCall}
