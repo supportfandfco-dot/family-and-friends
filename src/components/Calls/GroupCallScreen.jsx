@@ -4,7 +4,7 @@
 // ═══════════════════════════════════════════════════════
 
 import { useEffect, useRef, useState } from 'react';
-import { PhoneOff, Mic, MicOff, Video, VideoOff, Phone, Users } from 'lucide-react';
+import { PhoneOff, Mic, MicOff, Video, VideoOff, Phone, Users, RotateCcw } from 'lucide-react';
 import { useCallSounds } from '../../hooks/useCallSounds';
 
 // ── Hidden audio sink — plays remote audio for a stream ──
@@ -134,7 +134,7 @@ export default function GroupCallScreen({
   currentUserId,
   memberProfiles = {},
   onJoin, onDecline, onLeave,
-  onToggleMute, onToggleVideo,
+  onToggleMute, onToggleVideo, onSwitchCamera,
   formatDuration,
 }) {
   const { startRing, startCalling, stopSounds } = useCallSounds();
@@ -286,6 +286,15 @@ export default function GroupCallScreen({
                 {isVideoOff ? <VideoOff size={22} className="text-white" /> : <Video size={22} className="text-white" />}
               </button>
               <span className="text-white/70 text-xs">{isVideoOff ? 'Show' : 'Camera'}</span>
+            </div>
+          )}
+          {gcType === 'video' && (
+            <div className="flex flex-col items-center gap-1.5">
+              <button onClick={onSwitchCamera}
+                className="w-14 h-14 rounded-2xl bg-white/20 hover:bg-white/30 flex items-center justify-center transition-all active:scale-95">
+                <RotateCcw size={22} className="text-white" />
+              </button>
+              <span className="text-white/70 text-xs">Flip</span>
             </div>
           )}
           <div className="flex flex-col items-center gap-1.5">

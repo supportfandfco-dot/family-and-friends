@@ -631,15 +631,17 @@ export default function ChatWindow({ chatPartner, onBack, onVoiceCall, onVideoCa
   // Messages
   useEffect(() => {
     if (!chatId) return;
-    const prevCountRef = { current: 0 };
+    const prevCountRef  = { current: 0 };
+    const initialLoaded = { current: false }; // skip sound on first load
     const unsub = subscribeToMessages(chatId, msgs => {
       const prevCount = prevCountRef.current;
       prevCountRef.current = msgs.length;
-      // Play receive sound if a new message arrived from partner
-      if (msgs.length > prevCount && msgs.length > 0) {
+      // Only play sound for NEW messages after initial load — not when opening chat
+      if (initialLoaded.current && msgs.length > prevCount && msgs.length > 0) {
         const last = msgs[msgs.length - 1];
         if (last?.senderId !== user.uid) onSoundEffect?.('receive');
       }
+      initialLoaded.current = true;
       setMessages(msgs);
       if (msgs.length > 0 && !oldestDocRef.current) {
         // Store a reference so we know where to paginate from
@@ -953,8 +955,11 @@ export default function ChatWindow({ chatPartner, onBack, onVoiceCall, onVideoCa
   // Last seen label — RTDB stores timestamps as ms numbers
   const formatLastSeen = ts => {
     if (!ts) return 'Family & Friends';
-    // RTDB serverTimestamp() comes back as ms when read via onValue
-    const ms = typeof ts === 'number' ? ts : Number(ts);
+    // Handle Firestore Timestamp, RTDB ms number, or Date
+    let ms;
+    if (ts?.toDate) ms = ts.toDate().getTime();           // Firestore Timestamp
+    else if (ts?.seconds) ms = ts.seconds * 1000;         // Firestore plain object
+    else ms = typeof ts === 'number' ? ts : Number(ts);   // RTDB ms or fallback
     if (!ms || isNaN(ms)) return 'Family & Friends';
     const d = new Date(ms);
     const now = Date.now();
@@ -1398,9 +1403,9 @@ export default function ChatWindow({ chatPartner, onBack, onVoiceCall, onVideoCa
       {/* MEDIA AI SHEET */}
       {showMediaAI && mediaAIImage && (
         <>
-          <div className="fixed inset-0 z-[350]" style={{ background: 'rgba(0,0,0,0.7)', backdropFilter: 'blur(8px)' }}
+          <div className="fixed inset-0 z-[600]" style={{ background: 'rgba(0,0,0,0.85)', backdropFilter: 'blur(12px)' }}
             onClick={() => setShowMediaAI(false)}/>
-          <div className="fixed bottom-0 left-0 right-0 z-[351] rounded-t-3xl overflow-y-auto p-4"
+          <div className="fixed bottom-0 left-0 right-0 z-[601] rounded-t-3xl overflow-y-auto p-4"
             style={{ maxHeight: '85vh', background: 'rgba(14,14,14,0.95)', backdropFilter: 'blur(40px)', border: '1px solid rgba(255,255,255,0.06)' }}>
             <div className="flex items-center justify-between mb-4">
               <div className="flex items-center gap-2">

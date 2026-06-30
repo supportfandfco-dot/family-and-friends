@@ -433,6 +433,27 @@ export function useGroupWebRTC(currentUserId) {
 
   useEffect(() => () => cleanup(), []);
 
+  // ── Switch camera (front ↔ back) ──────────────────────
+  const switchGroupCamera = useCallback(async () => {
+    const stream = localStreamRef.current;
+    if (!stream) return;
+    const videoTrack = stream.getVideoTracks()[0];
+    if (!videoTrack) return;
+    const currentFacing = videoTrack.getSettings().facingMode || 'user';
+    const nextFacing    = currentFacing === 'user' ? 'environment' : 'user';
+    try {
+      const newStream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: nextFacing }, audio: false });
+      const newTrack  = newStream.getVideoTracks()[0];
+      for (const pc of Object.values(pcsRef.current)) {
+        const sender = pc.getSenders().find(s => s.track?.kind === 'video');
+        if (sender) await sender.replaceTrack(newTrack).catch(() => {});
+      }
+      stream.removeTrack(videoTrack);
+      stream.addTrack(newTrack);
+      videoTrack.stop();
+    } catch {}
+  }, []);
+
   return {
     gcCallId, gcStatus, gcType, gcParticipants, gcInfo,
     isMuted, isVideoOff, callDuration, remoteStreams,
@@ -440,7 +461,7 @@ export function useGroupWebRTC(currentUserId) {
     localVideoRef,
     startGroupCall, joinGroupCall, leaveGroupCall,
     startMeetingCall, joinMeetingCall,
-    toggleGroupMute, toggleGroupVideo,
+    toggleGroupMute, toggleGroupVideo, switchGroupCamera,
     formatDuration,
   };
 }

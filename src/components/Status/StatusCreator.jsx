@@ -8,7 +8,7 @@ import {
   AlignRight, Bold, Italic, ChevronRight
 } from 'lucide-react';
 import { useAuth } from '../../contexts/AuthContext';
-import { db, addDoc, collection, serverTimestamp, getUserById } from '../../firebase';
+import { db, addDoc, collection, serverTimestamp, getUserById, uploadMedia } from '../../firebase';
 import toast from 'react-hot-toast';
 
 const BG_GRADIENTS = [
@@ -100,22 +100,41 @@ export default function StatusCreator({ onClose, onPosted }) {
   const removeSticker = (id) =>
     setStickers(s => s.filter(st => st.id !== id));
 
+  // Get clientX/clientY from either a mouse or touch event
+  const getPoint = (e) => {
+    if (e.touches && e.touches.length) return { x: e.touches[0].clientX, y: e.touches[0].clientY };
+    if (e.changedTouches && e.changedTouches.length) return { x: e.changedTouches[0].clientX, y: e.changedTouches[0].clientY };
+    return { x: e.clientX, y: e.clientY };
+  };
+
   const startStickerDrag = (e, id) => {
-    e.stopPropagation(); e.preventDefault();
+    e.stopPropagation();
     const container = e.currentTarget.closest('[data-preview]');
     if (!container) return;
     const rect = container.getBoundingClientRect();
-    const sx = e.clientX, sy = e.clientY;
+    const start = getPoint(e);
     const sticker = stickers.find(s => s.id === id);
     if (!sticker) return;
     const spx = sticker.x, spy = sticker.y;
-    const move = (ev) => updateSticker(id, {
-      x: Math.max(5, Math.min(95, spx + ((ev.clientX - sx) / rect.width)  * 100)),
-      y: Math.max(5, Math.min(95, spy + ((ev.clientY - sy) / rect.height) * 100)),
-    });
-    const up = () => { window.removeEventListener('mousemove', move); window.removeEventListener('mouseup', up); };
+
+    const move = (ev) => {
+      ev.preventDefault();
+      const p = getPoint(ev);
+      updateSticker(id, {
+        x: Math.max(5, Math.min(95, spx + ((p.x - start.x) / rect.width)  * 100)),
+        y: Math.max(5, Math.min(95, spy + ((p.y - start.y) / rect.height) * 100)),
+      });
+    };
+    const up = () => {
+      window.removeEventListener('mousemove', move);
+      window.removeEventListener('mouseup', up);
+      window.removeEventListener('touchmove', move);
+      window.removeEventListener('touchend', up);
+    };
     window.addEventListener('mousemove', move);
     window.addEventListener('mouseup', up);
+    window.addEventListener('touchmove', move, { passive: false });
+    window.addEventListener('touchend', up);
   };
 
   const handlePost = async () => {
@@ -129,30 +148,63 @@ export default function StatusCreator({ onClose, onPosted }) {
         expiresAt: new Date(Date.now() + 24*60*60*1000).toISOString(),
         viewers: [], privacy, privacyContacts, music: null,
       };
-      if (type === 'text')  Object.assign(data, { text, bg, textColor, font, align, isBold, isItalic, fontSize, stickers });
-      if (type === 'image') Object.assign(data, { mediaUrl: mediaBase64, textOverlay, overlayColor, overlayBg, stickers });
+      if (type === 'text') {
+        Object.assign(data, { text, bg, textColor, font, align, isBold, isItalic, fontSize, stickers });
+      }
+      if (type === 'image') {
+        // Upload to Firebase Storage — Firestore has a 1MB doc limit, base64 images exceed it
+        const mediaUrl = await uploadMedia(mediaBase64, `statuses/${user.uid}/${Date.now()}.jpg`);
+        Object.assign(data, { mediaUrl, textOverlay, overlayColor, overlayBg, stickers });
+      }
       await addDoc(collection(db, 'statuses'), data);
       toast.success('Moment posted! 🎉');
       onPosted?.(); onClose();
-    } catch { toast.error('Failed to post'); }
+    } catch (err) {
+      toast.error(err?.message?.includes('timed out') ? 'Upload timed out — try a smaller image' : 'Failed to post');
+    }
     finally { setPosting(false); }
   };
 
+  const startStickerResize = (e, id, currentSize) => {
+    e.stopPropagation();
+    const start = getPoint(e);
+    const startSize = currentSize || 40;
+    const move = (ev) => {
+      ev.preventDefault();
+      const p = getPoint(ev);
+      const delta = p.x - start.x;
+      updateSticker(id, { size: Math.max(20, Math.min(120, startSize + delta)) });
+    };
+    const up = () => {
+      window.removeEventListener('mousemove', move);
+      window.removeEventListener('mouseup', up);
+      window.removeEventListener('touchmove', move);
+      window.removeEventListener('touchend', up);
+    };
+    window.addEventListener('mousemove', move);
+    window.addEventListener('mouseup', up);
+    window.addEventListener('touchmove', move, { passive: false });
+    window.addEventListener('touchend', up);
+  };
+
   const renderStickers = () => stickers.map(s => (
-    <div key={s.id} className="absolute group select-none"
+    <div key={s.id} className="absolute group select-none touch-none"
       style={{ left:`${s.x}%`, top:`${s.y}%`, transform:'translate(-50%,-50%)', zIndex:10, cursor:'grab' }}
-      onMouseDown={(e) => startStickerDrag(e, s.id)}>
+      onMouseDown={(e) => startStickerDrag(e, s.id)}
+      onTouchStart={(e) => startStickerDrag(e, s.id)}>
       <span style={{ fontSize: s.size || 40 }}>{s.emoji}</span>
-      <button onMouseDown={e=>e.stopPropagation()} onClick={()=>removeSticker(s.id)}
-        className="absolute -top-2 -right-2 w-4 h-4 rounded-full bg-red-500 text-white text-[10px] items-center justify-center hidden group-hover:flex">✕</button>
-      <div className="absolute -bottom-1 -right-1 w-3 h-3 bg-white rounded-full border border-gray-400 cursor-se-resize hidden group-hover:block"
-        onMouseDown={e => {
-          e.stopPropagation(); e.preventDefault();
-          const startSize = s.size || 40, startX = e.clientX;
-          const move = ev => updateSticker(s.id, { size: Math.max(20, Math.min(90, startSize + (ev.clientX - startX))) });
-          const up = () => { window.removeEventListener('mousemove', move); window.removeEventListener('mouseup', up); };
-          window.addEventListener('mousemove', move); window.addEventListener('mouseup', up);
-        }} />
+      {/* Remove button — always visible on mobile, hover-visible on desktop */}
+      <button
+        onMouseDown={e=>e.stopPropagation()}
+        onTouchStart={e=>e.stopPropagation()}
+        onClick={()=>removeSticker(s.id)}
+        className="absolute -top-2 -right-2 w-5 h-5 rounded-full bg-red-500 text-white text-[11px] flex items-center justify-center opacity-80 sm:opacity-0 sm:group-hover:opacity-100 transition-opacity">✕</button>
+      {/* Resize handle — always visible on mobile (no hover concept), hover-visible on desktop */}
+      <div
+        className="absolute -bottom-1.5 -right-1.5 w-5 h-5 bg-white rounded-full border-2 border-brand-500 cursor-se-resize opacity-80 sm:opacity-0 sm:group-hover:opacity-100 transition-opacity flex items-center justify-center"
+        onMouseDown={e => startStickerResize(e, s.id, s.size)}
+        onTouchStart={e => startStickerResize(e, s.id, s.size)}
+      />
     </div>
   ));
 

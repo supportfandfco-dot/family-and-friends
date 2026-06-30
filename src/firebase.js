@@ -44,89 +44,49 @@ const rtdb    = getDatabase(app);
 
 // ── Presence system ────────────────────────────────────────────
 export function setupPresence(uid) {
-  // Primary: Firestore (reliable, no RTDB rules needed)
-  // Secondary: RTDB (real-time, but requires correct rules)
-  const markOnline = async () => {
-    try {
-      await updateDoc(doc(db, 'users', uid), {
-        isOnline:  true,
-        lastSeen:  serverTimestamp(),
-      });
-    } catch {}
-    // Also try RTDB
-    try {
-      const r = dbRef(rtdb, `/status/${uid}`);
-      await onDisconnect(r).set({ state: 'offline', last_changed: dbTimestamp() });
-      await set(r, { state: 'online', last_changed: dbTimestamp() });
-    } catch {}
+  // Firestore is the single source of truth — see subscribeToPresence.
+  const markOnline = () => {
+    updateDoc(doc(db, 'users', uid), { isOnline: true, lastSeen: serverTimestamp() }).catch(() => {});
+  };
+  const markOffline = () => {
+    updateDoc(doc(db, 'users', uid), { isOnline: false, lastSeen: serverTimestamp() }).catch(() => {});
   };
 
-  const markOffline = async () => {
-    try {
-      await updateDoc(doc(db, 'users', uid), {
-        isOnline: false,
-        lastSeen: serverTimestamp(),
-      });
-    } catch {}
-    try {
-      await set(dbRef(rtdb, `/status/${uid}`), { state: 'offline', last_changed: dbTimestamp() });
-    } catch {}
-  };
-
-  // Mark online immediately
   markOnline();
 
-  // Handle tab visibility
   const handleVisibility = () => {
     if (document.visibilityState === 'visible') markOnline();
     else markOffline();
   };
   document.addEventListener('visibilitychange', handleVisibility);
-
-  // RTDB connected state (bonus real-time signal)
-  let rtdbUnsub = () => {};
-  try {
-    rtdbUnsub = onValue(dbRef(rtdb, '.info/connected'), snap => {
-      if (snap.val()) markOnline();
-    });
-  } catch {}
+  // Catch hard tab/browser close (visibilitychange doesn't always fire in time)
+  window.addEventListener('pagehide', markOffline);
+  window.addEventListener('beforeunload', markOffline);
 
   return () => {
     document.removeEventListener('visibilitychange', handleVisibility);
-    rtdbUnsub();
+    window.removeEventListener('pagehide', markOffline);
+    window.removeEventListener('beforeunload', markOffline);
     markOffline();
   };
 }
 
 export function subscribeToPresence(uid, callback) {
-  // Primary: Firestore isOnline field (always works)
-  // Secondary: RTDB for sub-second updates (if rules allow)
+  // Firestore is the single source of truth for presence.
+  // (Previously also listened to RTDB in parallel, but two independent
+  //  subscriptions firing the callback caused the dot to flicker randomly
+  //  whenever either source had stale/cached data.)
   let fsUnsub = null;
-  let rtdbUnsub = () => {};
-
-  // Firestore subscription — primary and reliable
   try {
     fsUnsub = onSnapshot(doc(db, 'users', uid), snap => {
       const d = snap.data();
       if (d !== undefined) {
-        const status = { state: d?.isOnline ? 'online' : 'offline', last_changed: d?.lastSeen };
-        callback(status);
+        callback({ state: d?.isOnline ? 'online' : 'offline', last_changed: d?.lastSeen });
       }
     });
   } catch {}
 
-  // RTDB subscription — bonus real-time signal (may be blocked by rules)
-  try {
-    rtdbUnsub = onValue(dbRef(rtdb, `/status/${uid}`), snap => {
-      const val = snap.val();
-      if (val?.state) callback(val);
-    });
-  } catch {}
-
-  return () => {
-    try { fsUnsub?.(); } catch {}
-    try { rtdbUnsub?.(); } catch {}
-  };
+  return () => { try { fsUnsub?.(); } catch {} };
 }
 
 function _subscribeToPresenceLegacy(uid, callback) {

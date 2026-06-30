@@ -172,7 +172,7 @@ function ChatRow({ chat, partner, isActive, uid, online, onSelect, onLongPress }
           </span>
         </div>
         <div className="flex items-center justify-between mt-0.5">
-          <span className="text-[13px] text-[var(--text-secondary)] truncate">
+          <span className={`text-[13px] truncate ${unread ? "text-[var(--text-primary)] font-medium" : "text-[var(--text-secondary)]"}`}>
             {getLastMsgPreview(chat.lastMessage, uid)}
           </span>
           <div className="flex items-center gap-1.5 flex-shrink-0">

@@ -143,7 +143,8 @@ function AppInner() {
     remoteStreams, localStream: gcLocalStream, localVideoRef: gcLocalVideoRef,
     startGroupCall, joinGroupCall, leaveGroupCall,
     startMeetingCall, joinMeetingCall,
-    toggleGroupMute, toggleGroupVideo, formatDuration: gcFormat,
+    toggleGroupMute, toggleGroupVideo, switchGroupCamera,
+    formatDuration: gcFormat,
   } = useGroupWebRTC(user?.uid);
 
   const [incomingGroupCall, setIncomingGroupCall] = useState(null);
@@ -598,6 +599,7 @@ function AppInner() {
           onLeave={handleLeaveGroupCall}
           onToggleMute={toggleGroupMute}
           onToggleVideo={toggleGroupVideo}
+          onSwitchCamera={switchGroupCamera}
           formatDuration={gcFormat}
         />
       )}

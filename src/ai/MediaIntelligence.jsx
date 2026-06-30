@@ -62,6 +62,22 @@ export default function MediaIntelligence({ imageBase64, mimeType = 'image/jpeg'
   const [copiedCaption, setCopiedCaption] = useState(false);
   const abortRef = useRef(null);
 
+  // Convert a Firebase Storage URL or data-URL into raw base64 + mime
+  const prepareImage = async (src) => {
+    if (src.startsWith('http://') || src.startsWith('https://')) {
+      const res  = await fetch(src);
+      const blob = await res.blob();
+      return new Promise((resolve) => {
+        const reader = new FileReader();
+        reader.onloadend = () => resolve({ b64: reader.result.split(',')[1], mime: blob.type || 'image/jpeg' });
+        reader.readAsDataURL(blob);
+      });
+    }
+    const b64  = src.includes(',') ? src.split(',')[1] : src;
+    const mime = src.startsWith('data:') ? src.split(';')[0].split(':')[1] : mimeType;
+    return { b64, mime };
+  };
+
   useEffect(() => {
     if (!imageBase64) return;
     setScanning(true);
@@ -71,25 +87,24 @@ export default function MediaIntelligence({ imageBase64, mimeType = 'image/jpeg'
     setDone(false);
     abortRef.current?.abort();
     abortRef.current = new AbortController();
+    const signal = abortRef.current.signal;
 
-    // Extract base64 data (strip data URL prefix if present)
-    const b64 = imageBase64.includes(',') ? imageBase64.split(',')[1] : imageBase64;
-    const mime = imageBase64.startsWith('data:') ? imageBase64.split(';')[0].split(':')[1] : mimeType;
-
-    analyzeImageBase64(
-      b64, mime,
-      (_, full) => { setAnalysisText(full); },
-      (full) => {
-        setAnalysisText(full);
-        setLoading(false);
-        setScanning(false);
-        setDone(true);
-        // Extract some fake tags from the response for visual effect
-        const words = full.split(' ').filter(w => w.length > 5).slice(0, 6);
-        setTags(words.slice(0, 3));
-      },
-      abortRef.current.signal,
-    ).catch(() => {
+    prepareImage(imageBase64).then(({ b64, mime }) => {
+      if (signal.aborted) return;
+      return analyzeImageBase64(
+        b64, mime,
+        (_, full) => { setAnalysisText(full); },
+        (full) => {
+          setAnalysisText(full);
+          setLoading(false);
+          setScanning(false);
+          setDone(true);
+          const words = full.split(' ').filter(w => w.length > 5).slice(0, 6);
+          setTags(words.slice(0, 3));
+        },
+        signal,
+      );
+    }).catch(() => {
       setLoading(false);
       setScanning(false);
     });
@@ -100,9 +115,9 @@ export default function MediaIntelligence({ imageBase64, mimeType = 'image/jpeg'
   const handleGenerateCaption = async () => {
     if (!imageBase64) return;
     setCaptionLoading(true);
-    const b64 = imageBase64.includes(',') ? imageBase64.split(',')[1] : imageBase64;
-    const mime = imageBase64.startsWith('data:') ? imageBase64.split(';')[0].split(':')[1] : mimeType;
+    setCaption('');
     try {
+      const { b64, mime } = await prepareImage(imageBase64);
       const cap = await generateCaption(b64, mime);
       setCaption(cap);
       onCaptionReady?.(cap);
