@@ -19,14 +19,19 @@ export default function MediaGallery({ chatId, isGroup, onClose, onViewImage }) 
 
   useEffect(() => {
     if (!chatId) return;
+    setLoading(true);
     const col = isGroup ? 'groups' : 'chats';
+    // NOTE: We intentionally avoid where('type','in',[...]) + orderBy('timestamp')
+    // together — that combination requires a Firestore composite index that
+    // isn't deployed, which silently throws failed-precondition and always
+    // returns 0 results. Instead: fetch by timestamp only, filter client-side.
     getDocs(query(
       collection(db, col, chatId, 'messages'),
-      where('type', 'in', ['image', 'video']),
       orderBy('timestamp', 'desc'),
-      limit(100)
+      limit(300)
     )).then(snap => {
-      setMedia(snap.docs.map(d => ({ id: d.id, ...d.data() })));
+      const all = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+      setMedia(all.filter(m => m.type === 'image' || m.type === 'video'));
       setLoading(false);
     }).catch(() => setLoading(false));
   }, [chatId, isGroup]);

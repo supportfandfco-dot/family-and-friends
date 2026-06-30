@@ -28,6 +28,52 @@
 
 @import "tailwindcss";
 
+/* ── Theme — migrated from tailwind.config.js to Tailwind v4's
+   CSS-first @theme block. The legacy JS config's `content` array
+   was restricting Tailwind's class scanner to a narrow file set,
+   causing most bg-brand-*/text-brand-* utility classes (especially
+   ones built via template literals/ternaries) to be silently
+   dropped from the compiled CSS. Defining the palette here makes
+   it unconditionally available regardless of content-scanning. ── */
+@theme {
+  --color-brand-50:  #f0fdf4;
+  --color-brand-100: #dcfce7;
+  --color-brand-200: #bbf7d0;
+  --color-brand-300: #86efac;
+  --color-brand-400: #4ade80;
+  --color-brand-500: #22c55e;
+  --color-brand-600: #16a34a;
+  --color-brand-700: #15803d;
+  --color-brand-800: #166534;
+  --color-brand-900: #14532d;
+  --color-brand-950: #052e16;
+
+  --color-dark-bg:     #0d1117;
+  --color-dark-panel:  #161b22;
+  --color-dark-card:   #1c2128;
+  --color-dark-border: #30363d;
+  --color-dark-hover:  #21262d;
+  --color-dark-input:  #0d1117;
+
+  --font-sans:    Nunito, system-ui, sans-serif;
+  --font-display: Poppins, system-ui, sans-serif;
+
+  --animate-slide-up:  slideUp 0.3s ease-out;
+  --animate-slide-in:  slideIn 0.25s ease-out;
+  --animate-fade-in:   fadeIn 0.2s ease-out;
+  --animate-wave:      wave 1.3s ease-in-out infinite;
+  --animate-ripple:    ripple 0.6s ease-out;
+  --animate-bounce-in: bounceIn 0.4s cubic-bezier(0.68,-0.55,0.27,1.55);
+}
+
+@keyframes slideUp  { from { transform: translateY(20px); opacity: 0; } to { transform: translateY(0); opacity: 1; } }
+@keyframes slideIn  { from { transform: translateX(-20px); opacity: 0; } to { transform: translateX(0); opacity: 1; } }
+@keyframes fadeIn   { from { opacity: 0; } to { opacity: 1; } }
+@keyframes wave     { 0%,60%,100% { transform: scaleY(1); } 30% { transform: scaleY(2); } }
+@keyframes ripple   { from { transform: scale(0); opacity: 1; } to { transform: scale(4); opacity: 0; } }
+@keyframes bounceIn { from { transform: scale(0.8); opacity: 0; } to { transform: scale(1); opacity: 1; } }
+
+
 @theme {
   --color-brand-50: #f0fdf4;
   --color-brand-100: #dcfce7;

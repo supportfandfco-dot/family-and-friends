@@ -300,10 +300,18 @@ export async function analyzeImageBase64(base64Data, mimeType = 'image/jpeg', on
   const b64  = base64Data.includes(',') ? base64Data.split(',')[1] : base64Data;
   const mime = base64Data.startsWith('data:') ? base64Data.split(';')[0].split(':')[1] : mimeType;
 
-  let text = 'Image received.';
+  let text;
+  let failed = false;
   try {
     text = await askVision(TEMPLATES.captionGenerate() + ' Also describe what you see in 2 sentences.', b64, mime, signal);
-  } catch {}
+    if (!text?.trim()) { text = 'Could not analyze this image right now.'; failed = true; }
+  } catch (err) {
+    if (err.name === 'AbortError') throw err;
+    text = err.message?.includes('not configured')
+      ? 'AI vision is not configured for this app yet.'
+      : 'Could not analyze this image right now.';
+    failed = true;
+  }
 
   const words = text.split(' ');
   let built = '';
@@ -319,7 +327,16 @@ export async function analyzeImageBase64(base64Data, mimeType = 'image/jpeg', on
 export async function generateCaption(base64Data, mimeType = 'image/jpeg') {
   const b64  = base64Data.includes(',') ? base64Data.split(',')[1] : base64Data;
   const mime = base64Data.startsWith('data:') ? base64Data.split(';')[0].split(':')[1] : mimeType;
-  try { return await askVision(TEMPLATES.captionGenerate(), b64, mime); } catch { return ''; }
+  try {
+    const result = await askVision(TEMPLATES.captionGenerate(), b64, mime);
+    if (!result?.trim()) throw new Error('Empty caption returned');
+    return result;
+  } catch (err) {
+    // Re-throw with a clear message so the UI can show the real reason
+    throw new Error(err.message?.includes('not configured')
+      ? 'AI vision not configured'
+      : 'Could not generate caption');
+  }
 }
 
 export async function enhanceStatusCaption(caption) {

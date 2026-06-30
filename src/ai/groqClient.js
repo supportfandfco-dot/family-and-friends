@@ -177,10 +177,15 @@ export async function askVision(prompt, imageBase64, mimeType, signal) {
       }),
     });
     const data = await res.json();
-    if (!res.ok || data.error) throw new Error(data.error);
+    if (!res.ok || data.error) {
+      // Surface the REAL reason (e.g. "GEMINI_API_KEY not configured")
+      // instead of a generic message — this is what was hiding the root cause.
+      const msg = typeof data.error === 'string' ? data.error : data.error?.message;
+      throw new Error(msg || `Vision request failed (${res.status})`);
+    }
     return data.text?.trim() || '';
   } catch (err) {
     if (err.name === 'AbortError' || err.message === 'timeout') throw err;
-    throw new Error('Vision unavailable');
+    throw err; // propagate the real error instead of masking it
   }
 }

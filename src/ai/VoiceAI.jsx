@@ -1,8 +1,17 @@
 // ═══════════════════════════════════════════════════════════
 //  VoiceAI — Voice interaction overlay.
 //  Uses the EXISTING overlayAsk() pipeline — same as text overlay.
-//  Auto-starts listening on open.
-//  Continuous conversation: AI speaks → recognition restarts.
+//  Auto-starts listening on open. Continuous conversation loop.
+//
+//  Bug fixed in this version: buildRecognition() was memoized with
+//  an EMPTY dependency array, so its internal rec.onend callback
+//  permanently captured the FIRST-render versions of handleAsk and
+//  startRecognition. Every render after that created new versions
+//  of those functions (since they depend on state), but the stale
+//  closure inside the recognizer never saw them — causing the loop
+//  to randomly break after one exchange. Fixed by routing all calls
+//  through refs that are kept in sync on every render, so the
+//  recognizer's callbacks always invoke the LATEST version.
 // ═══════════════════════════════════════════════════════════
 import { useEffect, useRef, useState, useCallback } from 'react';
 import { X, Mic, MicOff, Sparkles } from 'lucide-react';
@@ -29,7 +38,6 @@ function Waveform({ active }) {
   );
 }
 
-// Load TTS voices reliably — Chrome loads them async
 function waitForVoices() {
   return new Promise(resolve => {
     const voices = window.speechSynthesis?.getVoices() || [];
@@ -54,86 +62,21 @@ export default function VoiceAI({ context }) {
 
   const recognitionRef  = useRef(null);
   const abortRef        = useRef(null);
-  const transcriptRef   = useRef('');          // ref avoids stale closure in onend
+  const transcriptRef   = useRef('');
   const isSpeakingRef   = useRef(false);
-  const isActiveRef     = useRef(false);       // true while overlay is open and user hasn't muted
-
-  // ── Build recogniser ────────────────────────────────────
-  const buildRecognition = useCallback(() => {
-    const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
-    if (!SR) return null;
-    const rec = new SR();
-    rec.continuous     = false;   // false = more reliable cross-browser
-    rec.interimResults = true;
-    rec.lang           = 'en-US';
-
-    rec.onstart = () => {
-      setPhase('listening');
-      setVoiceListening(true);
-      transcriptRef.current = '';
-      setVoiceTranscript('');
-    };
-
-    rec.onresult = (e) => {
-      const t = Array.from(e.results).map(r => r[0].transcript).join('');
-      transcriptRef.current = t;
-      setVoiceTranscript(t);
-    };
-
-    // onend is the single reliable completion event
-    rec.onend = () => {
-      setVoiceListening(false);
-      const finalText = transcriptRef.current.trim();
-      transcriptRef.current = '';
-
-      if (!isActiveRef.current) return;  // overlay closed
-
-      if (finalText) {
-        handleAsk(finalText);
-      } else {
-        // No speech captured — restart recognition to keep listening
-        setPhase('idle');
-        setTimeout(() => {
-          if (isActiveRef.current && !isSpeakingRef.current) startRecognition();
-        }, 300);
-      }
-    };
-
-    rec.onerror = (e) => {
-      setVoiceListening(false);
-      if (!isActiveRef.current || e.error === 'aborted') return;
-      if (e.error === 'not-allowed') {
-        setError('Microphone access denied. Allow mic in browser settings.');
-        setPhase('idle');
-        return;
-      }
-      // no-speech, network — restart quietly
-      setPhase('idle');
-      setTimeout(() => {
-        if (isActiveRef.current && !isSpeakingRef.current) startRecognition();
-      }, 500);
-    };
-
-    return rec;
-  }, []);
-
-  // ── Start recognition ───────────────────────────────────
   const isProcessingRef = useRef(false);
+  const isActiveRef     = useRef(false);
+  const mutedRef        = useRef(false);
+  const contextRef      = useRef(context);
 
-  const startRecognition = useCallback(() => {
-    if (muted || isSpeakingRef.current || isProcessingRef.current || !isActiveRef.current) return;
-    try {
-      const rec = buildRecognition();
-      if (!rec) {
-        setError('Speech recognition not supported. Use Chrome or Edge.');
-        return;
-      }
-      recognitionRef.current = rec;
-      rec.start();
-    } catch (e) {
-      // Already started — ignore
-    }
-  }, [muted, buildRecognition]);
+  // Refs that always point to the LATEST function — read inside
+  // the recognizer's event handlers, which are otherwise frozen
+  // by useCallback's dependency array at creation time.
+  const handleAskRef        = useRef(() => {});
+  const startRecognitionRef = useRef(() => {});
+
+  useEffect(() => { mutedRef.current = muted; }, [muted]);
+  useEffect(() => { contextRef.current = context; }, [context]);
 
   // ── Speak AI response, then restart listening ───────────
   const speak = useCallback(async (text) => {
@@ -157,27 +100,21 @@ export default function VoiceAI({ context }) {
       utt.volume  = 1.0;
       if (preferred) utt.voice = preferred;
 
-      utt.onend = () => {
-        isSpeakingRef.current = false;
-        setPhase('idle');
-        resolve();
-        // Restart listening after AI finishes speaking
-        setTimeout(() => {
-          if (isActiveRef.current && !muted) startRecognition();
-        }, 400);
-      };
-      utt.onerror = () => {
+      const finishAndRestart = () => {
         isSpeakingRef.current = false;
         setPhase('idle');
         resolve();
         setTimeout(() => {
-          if (isActiveRef.current && !muted) startRecognition();
+          if (isActiveRef.current && !mutedRef.current) startRecognitionRef.current();
         }, 400);
       };
 
+      utt.onend   = finishAndRestart;
+      utt.onerror = finishAndRestart;
+
       window.speechSynthesis.speak(utt);
     });
-  }, [muted, startRecognition]);
+  }, []);
 
   // ── AI ask — uses the EXACT same pipeline as the text overlay ──
   const handleAsk = useCallback(async (question) => {
@@ -192,27 +129,108 @@ export default function VoiceAI({ context }) {
 
     await overlayAsk({
       question,
-      context: context || null,
+      context: contextRef.current || null,
       signal:  abortRef.current.signal,
       onProgress: () => {},
       onDone: async (full) => {
         if (!full?.trim()) {
-          setError('No response — check Groq API key in Cloudflare settings.');
+          isProcessingRef.current = false;
+          setError('No response — check your AI provider API key configuration.');
           setPhase('idle');
-          setTimeout(() => { if (isActiveRef.current && !muted) startRecognition(); }, 800);
+          setTimeout(() => { if (isActiveRef.current && !mutedRef.current) startRecognitionRef.current(); }, 800);
           return;
         }
         setVoiceResponse(full);
+        isProcessingRef.current = false;
         await speak(full);
       },
       onError: (err) => {
-        if (err?.name === 'AbortError') return;
-        setError('AI request failed. Check your Groq API key.');
+        if (err?.name === 'AbortError') { isProcessingRef.current = false; return; }
+        isProcessingRef.current = false;
+        setError('AI request failed. Please try again.');
         setPhase('idle');
-        setTimeout(() => { if (isActiveRef.current && !muted) startRecognition(); }, 1000);
+        setTimeout(() => { if (isActiveRef.current && !mutedRef.current) startRecognitionRef.current(); }, 1000);
       },
     });
-  }, [context, speak, muted, startRecognition]);
+  }, [speak]);
+
+  // Keep refs in sync with the latest function instances on every render
+  useEffect(() => { handleAskRef.current = handleAsk; }, [handleAsk]);
+
+  // ── Build recogniser — only ever reads from refs, never stale ──
+  const buildRecognition = useCallback(() => {
+    const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (!SR) return null;
+    const rec = new SR();
+    rec.continuous     = false;
+    rec.interimResults = true;
+    rec.lang           = 'en-US';
+
+    rec.onstart = () => {
+      setPhase('listening');
+      setVoiceListening(true);
+      transcriptRef.current = '';
+      setVoiceTranscript('');
+    };
+
+    rec.onresult = (e) => {
+      const t = Array.from(e.results).map(r => r[0].transcript).join('');
+      transcriptRef.current = t;
+      setVoiceTranscript(t);
+    };
+
+    rec.onend = () => {
+      setVoiceListening(false);
+      const finalText = transcriptRef.current.trim();
+      transcriptRef.current = '';
+
+      if (!isActiveRef.current) return;
+
+      if (finalText) {
+        // Always calls the LATEST handleAsk — never a stale first-render version
+        handleAskRef.current(finalText);
+      } else {
+        setPhase('idle');
+        setTimeout(() => {
+          if (isActiveRef.current && !isSpeakingRef.current) startRecognitionRef.current();
+        }, 300);
+      }
+    };
+
+    rec.onerror = (e) => {
+      setVoiceListening(false);
+      if (!isActiveRef.current || e.error === 'aborted') return;
+      if (e.error === 'not-allowed') {
+        setError('Microphone access denied. Allow mic in browser settings.');
+        setPhase('idle');
+        return;
+      }
+      setPhase('idle');
+      setTimeout(() => {
+        if (isActiveRef.current && !isSpeakingRef.current) startRecognitionRef.current();
+      }, 500);
+    };
+
+    return rec;
+  }, []);
+
+  // ── Start recognition ───────────────────────────────────
+  const startRecognition = useCallback(() => {
+    if (mutedRef.current || isSpeakingRef.current || isProcessingRef.current || !isActiveRef.current) return;
+    try {
+      const rec = buildRecognition();
+      if (!rec) {
+        setError('Speech recognition not supported. Use Chrome or Edge.');
+        return;
+      }
+      recognitionRef.current = rec;
+      rec.start();
+    } catch {
+      // Already started — ignore
+    }
+  }, [buildRecognition]);
+
+  useEffect(() => { startRecognitionRef.current = startRecognition; }, [startRecognition]);
 
   // ── Open/close lifecycle ────────────────────────────────
   useEffect(() => {
@@ -222,21 +240,20 @@ export default function VoiceAI({ context }) {
       abortRef.current?.abort();
       window.speechSynthesis?.cancel();
       isSpeakingRef.current = false;
+      isProcessingRef.current = false;
       setPhase('idle');
       setError(null);
       return;
     }
 
-    // Opening — auto-start listening
     isActiveRef.current = true;
     setPhase('idle');
     setError(null);
     setVoiceResponse('');
     setVoiceTranscript('');
 
-    // Small delay so the overlay animation completes before mic request
     setTimeout(() => {
-      if (isActiveRef.current) startRecognition();
+      if (isActiveRef.current) startRecognitionRef.current();
     }, 300);
 
     return () => {
@@ -251,13 +268,14 @@ export default function VoiceAI({ context }) {
   const handleMuteToggle = () => {
     const next = !muted;
     setMuted(next);
+    mutedRef.current = next;
     if (next) {
       try { recognitionRef.current?.abort(); } catch {}
       window.speechSynthesis?.cancel();
       isSpeakingRef.current = false;
       setPhase('idle');
     } else {
-      setTimeout(() => { if (isActiveRef.current) startRecognition(); }, 200);
+      setTimeout(() => { if (isActiveRef.current) startRecognitionRef.current(); }, 200);
     }
   };
 
@@ -289,7 +307,6 @@ export default function VoiceAI({ context }) {
     <div className="fixed inset-0 z-[500]"
       style={{ background: 'rgba(0,0,0,0.92)', backdropFilter: 'blur(20px)' }}>
 
-      {/* Ambient glow */}
       <div className="absolute inset-0 pointer-events-none overflow-hidden">
         <div className="absolute top-1/4 left-1/2 -translate-x-1/2 w-[500px] h-[500px] rounded-full blur-[120px] opacity-20 transition-all duration-1000"
           style={{ background: isListening
@@ -299,7 +316,6 @@ export default function VoiceAI({ context }) {
             : 'radial-gradient(circle, #d0bcff, transparent)' }}/>
       </div>
 
-      {/* Top bar */}
       <div className="absolute top-0 left-0 right-0 flex items-center justify-between px-6 h-16 z-10">
         <div className="flex items-center gap-2">
           <div className="w-2 h-2 rounded-full animate-pulse"
@@ -312,11 +328,10 @@ export default function VoiceAI({ context }) {
         <button onClick={handleClose}
           className="w-10 h-10 rounded-full flex items-center justify-center transition-all active:scale-90"
           style={{ background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(255,255,255,0.1)' }}>
-          <X size={18} style={{ color: 'rgba(229,226,225,0.8)' }}/>
+          <X size={18} style={{ color: 'rgba(229,226,225,0.8)' }} />
         </button>
       </div>
 
-      {/* Main orb */}
       <div className="absolute inset-0 flex flex-col items-center justify-center gap-8">
         <div className="relative flex items-center justify-center">
           {isListening && (
@@ -348,18 +363,17 @@ export default function VoiceAI({ context }) {
               }}/>
             <div className="relative z-10 flex flex-col items-center gap-2">
               {muted
-                ? <MicOff size={28} style={{ color: 'rgba(255,255,255,0.4)' }}/>
+                ? <MicOff size={28} style={{ color: 'rgba(255,255,255,0.4)' }} />
                 : isThinking || isSpeaking
-                  ? <Sparkles size={28} style={{ color: '#ffb0cd' }} className="animate-pulse"/>
+                  ? <Sparkles size={28} style={{ color: '#ffb0cd' }} className="animate-pulse" />
                   : isListening
-                  ? <Mic size={28} style={{ color: '#4cd7f6' }}/>
-                  : <Mic size={28} style={{ color: '#d0bcff' }}/>}
-              <Waveform active={isListening}/>
+                  ? <Mic size={28} style={{ color: '#4cd7f6' }} />
+                  : <Mic size={28} style={{ color: '#d0bcff' }} />}
+              <Waveform active={isListening} />
             </div>
           </button>
         </div>
 
-        {/* Live transcript */}
         {voiceTranscript ? (
           <div className="px-5 py-3 rounded-2xl text-center max-w-[80%]"
             style={{ background: 'rgba(32,31,31,0.7)', backdropFilter: 'blur(20px)', border: '1px solid rgba(255,255,255,0.08)', color: '#e5e2e1', fontSize: 15, lineHeight: 1.5 }}>
@@ -367,13 +381,12 @@ export default function VoiceAI({ context }) {
           </div>
         ) : null}
 
-        {/* AI response */}
         {voiceResponse && (
           <div className="px-6 max-w-sm mx-auto w-full">
             <div className="px-5 py-4 rounded-2xl"
               style={{ background: 'rgba(14,14,14,0.8)', backdropFilter: 'blur(24px)', border: '1px solid rgba(208,188,255,0.15)', boxShadow: '0 0 30px rgba(208,188,255,0.1)' }}>
               <div className="flex items-center gap-2 mb-2">
-                <Sparkles size={12} style={{ color: '#d0bcff' }}/>
+                <Sparkles size={12} style={{ color: '#d0bcff' }} />
                 <span className="text-[10px] font-bold tracking-widest" style={{ color: '#d0bcff' }}>UNIFYAI</span>
               </div>
               <p className="text-[14px] leading-relaxed" style={{ color: '#e5e2e1' }}>{voiceResponse}</p>

@@ -122,7 +122,7 @@ export default function MediaIntelligence({ imageBase64, mimeType = 'image/jpeg'
       setCaption(cap);
       onCaptionReady?.(cap);
     } catch (e) {
-      setCaption('Could not generate caption.');
+      setCaption(e?.message || 'Could not generate caption.');
     } finally {
       setCaptionLoading(false);
     }
