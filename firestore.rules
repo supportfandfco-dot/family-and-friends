@@ -58,13 +58,29 @@ service cloud.firestore {
     // ── Group Calls ───────────────────────────────────────
     match /groupCalls/{callId} {
       allow read, write: if request.auth != null;
-      match /{subcollection}/{docId} {
+      // signals/{offererUid_answererUid} — 1 level deep, covered here
+      match /signals/{docId} {
         allow read, write: if request.auth != null;
+      }
+      // candidates/{key}/list/{autoId} — 2 levels deep. The previous rule
+      // only matched 1 level (groupCalls/{callId}/{subcollection}/{docId}),
+      // so every ICE candidate write/read here was silently denied —
+      // this is exactly why meeting/group calls connected the signaling
+      // (offer/answer) but never actually established media (no ICE).
+      match /candidates/{key} {
+        allow read, write: if request.auth != null;
+        match /list/{docId} {
+          allow read, write: if request.auth != null;
+        }
       }
     }
 
     // ── Status / Moments ──────────────────────────────────
-    match /status/{statusId} {
+    // App code writes to 'statuses' (plural) — this MUST match exactly,
+    // otherwise Firestore silently denies all reads/writes to it with
+    // permission-denied, which is exactly what was causing every single
+    // moment post (text AND image) to fail.
+    match /statuses/{statusId} {
       allow read, write: if request.auth != null;
     }
   }

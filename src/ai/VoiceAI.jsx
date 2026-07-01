@@ -17,6 +17,8 @@ import { useEffect, useRef, useState, useCallback } from 'react';
 import { X, Mic, MicOff, Sparkles } from 'lucide-react';
 import useAIStore from './useAIStore';
 import { overlayAsk } from './unifyService';
+import { tryExecuteVoiceAction } from './voiceActions';
+import { useAuth } from '../contexts/AuthContext';
 
 function Waveform({ active }) {
   const bars = [3, 5, 8, 12, 16, 20, 16, 12, 8, 5, 3];
@@ -49,6 +51,7 @@ function waitForVoices() {
 }
 
 export default function VoiceAI({ context }) {
+  const { user } = useAuth();
   const {
     voiceAIOpen, closeVoiceAI,
     voiceTranscript, setVoiceTranscript,
@@ -127,6 +130,21 @@ export default function VoiceAI({ context }) {
     abortRef.current?.abort();
     abortRef.current = new AbortController();
 
+    // Check if this is a real actionable request (e.g. "add a task to...")
+    // before falling through to plain conversation. This is what makes
+    // Voice AI actually DO things instead of just talking about them.
+    try {
+      const action = await tryExecuteVoiceAction(question, user?.uid);
+      if (action.handled) {
+        setVoiceResponse(action.responseText);
+        isProcessingRef.current = false;
+        await speak(action.responseText);
+        return;
+      }
+    } catch {
+      // Action detection failed — fall through to normal conversation
+    }
+
     await overlayAsk({
       question,
       context: contextRef.current || null,
@@ -152,7 +170,7 @@ export default function VoiceAI({ context }) {
         setTimeout(() => { if (isActiveRef.current && !mutedRef.current) startRecognitionRef.current(); }, 1000);
       },
     });
-  }, [speak]);
+  }, [speak, user?.uid]);
 
   // Keep refs in sync with the latest function instances on every render
   useEffect(() => { handleAskRef.current = handleAsk; }, [handleAsk]);

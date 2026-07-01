@@ -888,126 +888,31 @@ export function onForegroundMessage(callback) {
 // Uses SubtleCrypto (built into all modern browsers) to sign JWTs.
 // Service account fields come from .env — see .env.template for instructions.
 
-let _v1TokenCache = { token: null, expiresAt: 0 };
 
-async function getV1AccessToken() {
-  // Return cached token if still valid (5-min buffer)
-  if (_v1TokenCache.token && Date.now() < _v1TokenCache.expiresAt - 300_000) {
-    return _v1TokenCache.token;
-  }
-
-  const clientEmail = import.meta.env.VITE_SA_CLIENT_EMAIL;
-  const privateKeyPem = import.meta.env.VITE_SA_PRIVATE_KEY?.replace(/\\n/g, '\n');
-  if (!clientEmail || !privateKeyPem) {
-    // Push notifications disabled — VITE_SA_CLIENT_EMAIL / VITE_SA_PRIVATE_KEY not configured
-    return null;
-  }
-
-  // Build JWT header + payload
-  const now = Math.floor(Date.now() / 1000);
-  const header  = { alg: 'RS256', typ: 'JWT' };
-  const payload = {
-    iss: clientEmail,
-    sub: clientEmail,
-    aud: 'https://oauth2.googleapis.com/token',
-    iat: now,
-    exp: now + 3600,
-    scope: 'https://www.googleapis.com/auth/firebase.messaging',
-  };
-
-  const b64url = (obj) => btoa(JSON.stringify(obj))
-    .replace(/\+/g, '-').replace(/\//g, '_').replace(/=/g, '');
-
-  const signingInput = `${b64url(header)}.${b64url(payload)}`;
-
-  // Import the RSA private key
-  const pemBody = privateKeyPem
-    .replace(/-----BEGIN PRIVATE KEY-----/, '')
-    .replace(/-----END PRIVATE KEY-----/, '')
-    .replace(/\s/g, '');
-  const keyDer = Uint8Array.from(atob(pemBody), c => c.charCodeAt(0));
-
-  const cryptoKey = await crypto.subtle.importKey(
-    'pkcs8', keyDer.buffer,
-    { name: 'RSASSA-PKCS1-v1_5', hash: 'SHA-256' },
-    false, ['sign']
-  );
-
-  const sig = await crypto.subtle.sign(
-    'RSASSA-PKCS1-v1_5',
-    cryptoKey,
-    new TextEncoder().encode(signingInput)
-  );
-
-  const sigB64 = btoa(String.fromCharCode(...new Uint8Array(sig)))
-    .replace(/\+/g, '-').replace(/\//g, '_').replace(/=/g, '');
-
-  const jwt = `${signingInput}.${sigB64}`;
-
-  // Exchange JWT for OAuth2 access token
-  const res = await fetch('https://oauth2.googleapis.com/token', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-    body: `grant_type=urn%3Aietf%3Aparams%3Aoauth%3Agrant-type%3Ajwt-bearer&assertion=${jwt}`,
-  });
-  const json = await res.json();
-  if (!json.access_token) return null; // OAuth exchange failed — push disabled
-
-  _v1TokenCache = { token: json.access_token, expiresAt: Date.now() + json.expires_in * 1000 };
-  return json.access_token;
-}
-
+// ── Push notifications — routed through a server-side Cloudflare Pages
+// Function (functions/api/send-push.js). Previously this ran entirely
+// client-side: it bundled a service-account RSA private key into the
+// public JS bundle (a serious secret leak) AND called FCM's send API
+// directly from the browser, which Google blocks via CORS — meaning
+// every single push silently failed. Now the client just POSTs the
+// recipient's token + message to our own backend, which holds the
+// real credentials server-side where CORS doesn't apply.
 export async function sendPushNotification(recipientUid, title, body, data = {}) {
   try {
     const snap = await getDoc(doc(db, 'users', recipientUid));
     const token = snap.data()?.fcmToken;
     if (!token) return;
 
-    const accessToken = await getV1AccessToken();
-    if (!accessToken) return;
-
-    const projectId = 'family-friends-ee992';
-    const isCall = !!data.callType;
-
-    // Calls get "Open app" action; messages get "↩ Reply"
-    const actions = isCall
-      ? [{ action: 'open', title: 'Open app' }]
-      : [{ action: 'reply', title: '↩ Reply' }, { action: 'dismiss', title: 'Dismiss' }];
-
-    await fetch(`https://fcm.googleapis.com/v1/projects/${projectId}/messages:send`, {
+    await fetch('/api/send-push', {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${accessToken}`,
-      },
-      body: JSON.stringify({
-        message: {
-          token,
-          notification: { title, body },
-          data: Object.fromEntries(
-            Object.entries({ ...data }).map(([k, v]) => [k, String(v)])
-          ),
-          webpush: {
-            notification: {
-              title,
-              body,
-              icon: '/icon-192.png',
-              tag: data.tag || 'ff-msg',
-              renotify: true,
-              requireInteraction: isCall, // keep call notifications on screen until dismissed
-              actions,
-            },
-            fcm_options: { link: '/' },
-          },
-        },
-      }),
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ token, title, body, data }),
     });
-  } catch (e) {
+  } catch {
     // Push send failed — non-critical, app continues
   }
 }
 
-// Truncate message content to short preview (≤4 words)
 export function makePreview(content, type) {
   if (!content) return '';
   if (type === 'image') return '📷 Photo';
