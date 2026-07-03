@@ -144,7 +144,13 @@ export default function StatusCreator({ onClose, onPosted }) {
     try {
       const data = {
         uid: user.uid, authorName: profile.name, authorAvatar: profile.avatar || null,
-        type, createdAt: serverTimestamp(),
+        // ISO string instead of serverTimestamp(): the Moments feed does
+        // orderBy('createdAt','desc'), and Firestore's local cache excludes
+        // docs with a still-pending serverTimestamp from ordered query
+        // results until the server round-trip confirms it. That's why a
+        // freshly-posted moment (toast says success) wouldn't show up in
+        // the tab. Same fix already applied to chat message timestamps.
+        type, createdAt: new Date().toISOString(),
         expiresAt: new Date(Date.now() + 24*60*60*1000).toISOString(),
         viewers: [], privacy, privacyContacts, music: null,
       };

@@ -1,0 +1,31 @@
+rules_version = '2';
+service firebase.storage {
+  match /b/{bucket}/o {
+
+    // ── Profile avatars ───────────────────────────────────
+    // Path used: profiles/{uid}/avatar_{timestamp}
+    match /profiles/{userId}/{fileName} {
+      allow read: if request.auth != null;
+      allow write: if request.auth != null && request.auth.uid == userId;
+    }
+
+    // ── Moments / Status media ─────────────────────────────
+    // Path used: statuses/{uid}/{timestamp}.jpg
+    match /statuses/{userId}/{fileName} {
+      allow read: if request.auth != null;
+      allow write: if request.auth != null && request.auth.uid == userId;
+    }
+
+    // ── Direct chat media (images, voice notes) ────────────
+    // Path used: chats/{chatId}/{timestamp}_{fileName}
+    match /chats/{chatId}/{fileName} {
+      allow read, write: if request.auth != null;
+    }
+
+    // ── Group chat media ────────────────────────────────────
+    // Path used: groups/{groupId}/{timestamp}_{fileName}
+    match /groups/{groupId}/{fileName} {
+      allow read, write: if request.auth != null;
+    }
+  }
+}

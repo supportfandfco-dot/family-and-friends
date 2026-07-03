@@ -43,8 +43,23 @@ const storage = getStorage(app);
 const rtdb    = getDatabase(app);
 
 // ── Presence system ────────────────────────────────────────────
+// Firestore has no server-side disconnect detection (unlike RTDB's
+// onDisconnect), so markOffline() only fires from client-side events
+// (visibilitychange / pagehide / beforeunload). On mobile browsers and
+// PWAs those events are unreliable — the OS can kill a backgrounded tab,
+// or the network can just drop, without ever firing them. When that
+// happens isOnline stays stuck at `true` forever, which is why the dot
+// looked "random": some people's sessions ended cleanly (event fired,
+// correctly offline) and others didn't (event never fired, stuck online).
+//
+// Fix: a heartbeat that refreshes lastSeen every 25s while the tab is
+// visible, plus a staleness check on the read side — a user only counts
+// as online if isOnline is true AND lastSeen is recent. A stuck-true flag
+// with an old lastSeen now correctly resolves to offline.
+const PRESENCE_HEARTBEAT_MS = 25_000;
+const PRESENCE_STALE_MS     = 60_000;
+
 export function setupPresence(uid) {
-  // Firestore is the single source of truth — see subscribeToPresence.
   const markOnline = () => {
     updateDoc(doc(db, 'users', uid), { isOnline: true, lastSeen: serverTimestamp() }).catch(() => {});
   };
@@ -53,6 +68,10 @@ export function setupPresence(uid) {
   };
 
   markOnline();
+
+  let heartbeatId = setInterval(() => {
+    if (document.visibilityState === 'visible') markOnline();
+  }, PRESENCE_HEARTBEAT_MS);
 
   const handleVisibility = () => {
     if (document.visibilityState === 'visible') markOnline();
@@ -64,6 +83,7 @@ export function setupPresence(uid) {
   window.addEventListener('beforeunload', markOffline);
 
   return () => {
+    clearInterval(heartbeatId);
     document.removeEventListener('visibilitychange', handleVisibility);
     window.removeEventListener('pagehide', markOffline);
     window.removeEventListener('beforeunload', markOffline);
@@ -73,15 +93,16 @@ export function setupPresence(uid) {
 
 export function subscribeToPresence(uid, callback) {
   // Firestore is the single source of truth for presence.
-  // (Previously also listened to RTDB in parallel, but two independent
-  //  subscriptions firing the callback caused the dot to flicker randomly
-  //  whenever either source had stale/cached data.)
   let fsUnsub = null;
   try {
     fsUnsub = onSnapshot(doc(db, 'users', uid), snap => {
       const d = snap.data();
       if (d !== undefined) {
-        callback({ state: d?.isOnline ? 'online' : 'offline', last_changed: d?.lastSeen });
+        const lastSeenMs = d?.lastSeen?.toMillis ? d.lastSeen.toMillis()
+          : (typeof d?.lastSeen === 'number' ? d.lastSeen : null);
+        const isStale = lastSeenMs !== null && (Date.now() - lastSeenMs) > PRESENCE_STALE_MS;
+        const online = !!d?.isOnline && !isStale;
+        callback({ state: online ? 'online' : 'offline', last_changed: d?.lastSeen });
       }
     });
   } catch {}

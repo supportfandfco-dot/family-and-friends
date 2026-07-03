@@ -105,58 +105,61 @@ async function groqRequest(model, messages, maxTokens, signal, attempt = 0) {
 
 // ── Fast model (llama-3.1-8b-instant) ────────────────────────
 export async function askFast(prompt, systemPrompt, signal) {
-  const cached = getCached(prompt, 'fast');
+  const sys = systemPrompt || SYSTEM_BASE;
+  const cached = getCached(prompt, 'fast', sys);
   if (cached) return cached;
 
   const text = await groqRequest(
     GROQ_MODELS.fast.id,
     [
-      { role: 'system', content: systemPrompt || SYSTEM_BASE },
+      { role: 'system', content: sys },
       { role: 'user',   content: prompt },
     ],
     GROQ_MODELS.fast.maxTokens,
     signal
   );
 
-  setCache(prompt, text, 'fast');
+  setCache(prompt, text, 'fast', sys);
   return text;
 }
 
 // ── Deep reasoning model (llama-3.3-70b-versatile) ───────────
 export async function askDeep(prompt, systemPrompt, signal) {
-  const cached = getCached(prompt, 'deep');
+  const sys = systemPrompt || SYSTEM_BASE;
+  const cached = getCached(prompt, 'deep', sys);
   if (cached) return cached;
 
   const text = await groqRequest(
     GROQ_MODELS.deep.id,
     [
-      { role: 'system', content: systemPrompt || SYSTEM_BASE },
+      { role: 'system', content: sys },
       { role: 'user',   content: prompt },
     ],
     GROQ_MODELS.deep.maxTokens,
     signal
   );
 
-  setCache(prompt, text, 'deep');
+  setCache(prompt, text, 'deep', sys);
   return text;
 }
 
 // ── Analytical model (deepseek-r1-distill-llama-70b) ─────────
 export async function askAnalytical(prompt, systemPrompt, signal) {
-  const cached = getCached(prompt, 'analytical');
+  const sys = systemPrompt || SYSTEM_BASE;
+  const cached = getCached(prompt, 'analytical', sys);
   if (cached) return cached;
 
   const text = await groqRequest(
     GROQ_MODELS.analytical.id,
     [
-      { role: 'system', content: systemPrompt || SYSTEM_BASE },
+      { role: 'system', content: sys },
       { role: 'user',   content: prompt },
     ],
     GROQ_MODELS.analytical.maxTokens,
     signal
   );
 
-  setCache(prompt, text, 'analytical');
+  setCache(prompt, text, 'analytical', sys);
   return text;
 }
 
