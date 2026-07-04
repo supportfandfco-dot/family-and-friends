@@ -395,10 +395,13 @@ export default function ChatList({ onSelectChat, onSelectGroup, onOpenSettings, 
   const hasArchived = archivedChats.length > 0 || archivedGroups.length > 0;
 
   // ── Bottom nav items ──────────────────────────────────
+  // NEVER hardcode badge values — every nav item consumes real unread state.
+  // AI Hub (Command Center) surfaces the same unread chats/groups, so it
+  // shares totalChatUnread rather than duplicating the aggregation logic.
   const bottomTabs = [
     { id: 'chats',    icon: MessageCircle, label: 'Chats',    badge: totalChatUnread },
     { id: 'moments',  icon: Star,          label: 'Moments',  badge: 0 },
-    { id: 'aihub',    icon: Sparkles,      label: 'AI Hub',   badge: 0 },
+    { id: 'aihub',    icon: Sparkles,      label: 'AI Hub',   badge: totalChatUnread },
     { id: 'contacts', icon: User,          label: 'Contacts', badge: 0 },
     { id: 'calls',    icon: Phone,         label: 'Calls',    badge: 0 },
   ];

@@ -50,6 +50,11 @@ function waitForVoices() {
   });
 }
 
+// Stage instrumentation for the voice pipeline — makes it possible to
+// pinpoint exactly where a conversation turn breaks (mic -> recognition ->
+// transcript -> router -> Groq -> synthesis -> restart) from the console.
+function vlog(...args) { console.log('[VOICE]', ...args); }
+
 export default function VoiceAI({ context }) {
   const { user } = useAuth();
   const {
@@ -71,6 +76,10 @@ export default function VoiceAI({ context }) {
   const isActiveRef     = useRef(false);
   const mutedRef        = useRef(false);
   const contextRef      = useRef(context);
+  // True between the recognizer's onstart and onend/onerror — lets us tell
+  // whether the mic is already live (e.g. as a barge-in listener during TTS)
+  // before ever attempting a second, conflicting rec.start() call.
+  const isRecognitionActiveRef = useRef(false);
 
   // Refs that always point to the LATEST function — read inside
   // the recognizer's event handlers, which are otherwise frozen
@@ -82,10 +91,16 @@ export default function VoiceAI({ context }) {
   useEffect(() => { contextRef.current = context; }, [context]);
 
   // ── Speak AI response, then restart listening ───────────
+  // Gemini-Live-style barge-in: the mic is started IN PARALLEL with TTS
+  // (allowDuringSpeech), so if the user starts talking while the AI is
+  // still speaking, rec.onspeechstart fires, cancels the utterance
+  // immediately, and the SAME recognition instance keeps capturing the
+  // user's new utterance — no duplicate pipeline, no extra AI router.
   const speak = useCallback(async (text) => {
     if (!text?.trim() || !('speechSynthesis' in window)) return;
     isSpeakingRef.current = true;
     setPhase('speaking');
+    vlog('Speaking response');
 
     window.speechSynthesis.cancel();
     const voices = await waitForVoices();
@@ -96,6 +111,11 @@ export default function VoiceAI({ context }) {
       (v.lang.startsWith('en') && !v.name.includes('Male'))
     ) || null;
 
+    // Start listening for barge-in right away — doesn't block TTS playback.
+    if (isActiveRef.current && !mutedRef.current) {
+      startRecognitionRef.current({ allowDuringSpeech: true });
+    }
+
     return new Promise(resolve => {
       const utt   = new SpeechSynthesisUtterance(text.slice(0, 500));
       utt.rate    = 1.05;
@@ -105,11 +125,19 @@ export default function VoiceAI({ context }) {
 
       const finishAndRestart = () => {
         isSpeakingRef.current = false;
-        setPhase('idle');
         resolve();
-        setTimeout(() => {
-          if (isActiveRef.current && !mutedRef.current) startRecognitionRef.current();
-        }, 400);
+        if (isRecognitionActiveRef.current) {
+          // Barge-in listener is already live — just flip the visual
+          // state, no second rec.start() (would throw InvalidStateError
+          // and risk two overlapping recognizers).
+          setPhase('listening');
+        } else {
+          setPhase('idle');
+          vlog('Restarting recognizer');
+          setTimeout(() => {
+            if (isActiveRef.current && !mutedRef.current) startRecognitionRef.current();
+          }, 400);
+        }
       };
 
       utt.onend   = finishAndRestart;
@@ -129,6 +157,8 @@ export default function VoiceAI({ context }) {
     setVoiceResponse('');
     abortRef.current?.abort();
     abortRef.current = new AbortController();
+    vlog('Transcript received:', question);
+    vlog('Sending to existing UnifyAI router (tryExecuteVoiceAction -> overlayAsk)');
 
     // Check if this is a real actionable request (e.g. "add a task to...")
     // before falling through to plain conversation. This is what makes
@@ -136,6 +166,7 @@ export default function VoiceAI({ context }) {
     try {
       const action = await tryExecuteVoiceAction(question, user?.uid);
       if (action.handled) {
+        vlog('Handled as voice action:', action.responseText?.slice(0, 60));
         setVoiceResponse(action.responseText);
         isProcessingRef.current = false;
         await speak(action.responseText);
@@ -158,6 +189,7 @@ export default function VoiceAI({ context }) {
           setTimeout(() => { if (isActiveRef.current && !mutedRef.current) startRecognitionRef.current(); }, 800);
           return;
         }
+        vlog('Groq responding:', full.slice(0, 60));
         setVoiceResponse(full);
         isProcessingRef.current = false;
         await speak(full);
@@ -185,10 +217,26 @@ export default function VoiceAI({ context }) {
     rec.lang           = 'en-US';
 
     rec.onstart = () => {
-      setPhase('listening');
+      isRecognitionActiveRef.current = true;
+      vlog('Recognition started', isSpeakingRef.current ? '(barge-in listener, AI still speaking)' : '');
+      // Don't stomp on the "SPEAKING…" UI if this is a barge-in listener
+      // starting in parallel with TTS — only show LISTENING once the AI
+      // actually finishes, or once the user actually barges in (below).
+      if (!isSpeakingRef.current) setPhase('listening');
       setVoiceListening(true);
       transcriptRef.current = '';
       setVoiceTranscript('');
+    };
+
+    // Fires as soon as the recognizer detects actual speech energy — used
+    // as the barge-in trigger since it's faster than waiting for onresult.
+    rec.onspeechstart = () => {
+      if (isSpeakingRef.current) {
+        vlog('Barge-in detected — stopping TTS');
+        window.speechSynthesis.cancel();
+        isSpeakingRef.current = false;
+        setPhase('listening');
+      }
     };
 
     rec.onresult = (e) => {
@@ -198,6 +246,7 @@ export default function VoiceAI({ context }) {
     };
 
     rec.onend = () => {
+      isRecognitionActiveRef.current = false;
       setVoiceListening(false);
       const finalText = transcriptRef.current.trim();
       transcriptRef.current = '';
@@ -205,8 +254,19 @@ export default function VoiceAI({ context }) {
       if (!isActiveRef.current) return;
 
       if (finalText) {
-        // Always calls the LATEST handleAsk — never a stale first-render version
+        // If this text was captured mid-TTS (barge-in), isSpeakingRef is
+        // already false (onspeechstart cancelled it) — handleAsk proceeds
+        // through the exact same pipeline either way.
+        vlog('Transcript received:', finalText);
         handleAskRef.current(finalText);
+      } else if (isSpeakingRef.current) {
+        // The barge-in listener timed out (continuous=false has a native
+        // silence timeout) while the AI is STILL talking — restart it so
+        // barge-in stays available for the rest of a long response,
+        // instead of leaving a dead window with no mic until TTS ends.
+        setTimeout(() => {
+          if (isActiveRef.current) startRecognitionRef.current({ allowDuringSpeech: true });
+        }, 200);
       } else {
         // No transcript captured — this fires routinely because
         // continuous=false makes the browser stop listening the instant
@@ -223,6 +283,7 @@ export default function VoiceAI({ context }) {
     };
 
     rec.onerror = (e) => {
+      isRecognitionActiveRef.current = false;
       setVoiceListening(false);
       if (!isActiveRef.current || e.error === 'aborted') return;
       if (e.error === 'not-allowed') {
@@ -232,18 +293,26 @@ export default function VoiceAI({ context }) {
       }
       // Recoverable error (e.g. "no-speech", "network") — silently retry
       // without flashing the idle/"tap to speak" state; same reasoning as
-      // the empty-transcript branch above.
+      // the empty-transcript branch above. Preserve barge-in capability if
+      // the AI is still mid-response.
+      const stillSpeaking = isSpeakingRef.current;
       setTimeout(() => {
-        if (isActiveRef.current && !isSpeakingRef.current) startRecognitionRef.current();
-      }, 500);
+        if (!isActiveRef.current) return;
+        startRecognitionRef.current(stillSpeaking ? { allowDuringSpeech: true } : undefined);
+      }, stillSpeaking ? 200 : 500);
     };
 
     return rec;
   }, []);
 
   // ── Start recognition ───────────────────────────────────
-  const startRecognition = useCallback(() => {
-    if (mutedRef.current || isSpeakingRef.current || isProcessingRef.current || !isActiveRef.current) return;
+  const startRecognition = useCallback((opts) => {
+    const allowDuringSpeech = !!opts?.allowDuringSpeech;
+    if (mutedRef.current || isProcessingRef.current || !isActiveRef.current) return;
+    if (isSpeakingRef.current && !allowDuringSpeech) return;
+    // Never start a second recognizer while one is already live — browsers
+    // throw InvalidStateError and it risks two overlapping mic streams.
+    if (isRecognitionActiveRef.current) return;
     try {
       const rec = buildRecognition();
       if (!rec) {
@@ -268,6 +337,7 @@ export default function VoiceAI({ context }) {
       window.speechSynthesis?.cancel();
       isSpeakingRef.current = false;
       isProcessingRef.current = false;
+      isRecognitionActiveRef.current = false;
       setPhase('idle');
       setError(null);
       return;
@@ -288,6 +358,7 @@ export default function VoiceAI({ context }) {
       try { recognitionRef.current?.abort(); } catch {}
       abortRef.current?.abort();
       window.speechSynthesis?.cancel();
+      isRecognitionActiveRef.current = false;
     };
   }, [voiceAIOpen]);
 
@@ -300,6 +371,7 @@ export default function VoiceAI({ context }) {
       try { recognitionRef.current?.abort(); } catch {}
       window.speechSynthesis?.cancel();
       isSpeakingRef.current = false;
+      isRecognitionActiveRef.current = false;
       setPhase('idle');
     } else {
       setTimeout(() => { if (isActiveRef.current) startRecognitionRef.current(); }, 200);
@@ -312,6 +384,7 @@ export default function VoiceAI({ context }) {
     abortRef.current?.abort();
     window.speechSynthesis?.cancel();
     isSpeakingRef.current = false;
+    isRecognitionActiveRef.current = false;
     closeVoiceAI();
     setPhase('idle');
     setMuted(false);
