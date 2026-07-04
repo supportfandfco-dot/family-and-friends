@@ -208,7 +208,14 @@ export default function VoiceAI({ context }) {
         // Always calls the LATEST handleAsk — never a stale first-render version
         handleAskRef.current(finalText);
       } else {
-        setPhase('idle');
+        // No transcript captured — this fires routinely because
+        // continuous=false makes the browser stop listening the instant
+        // it detects a pause, often before the final onresult has landed
+        // in transcriptRef. This is NOT the user going idle, it's an
+        // automatic restart — so we deliberately do NOT setPhase('idle')
+        // here. Flipping to idle (which renders "TAP TO SPEAK") for the
+        // ~300ms restart window is exactly what caused the
+        // listening -> tap to speak -> listening flicker.
         setTimeout(() => {
           if (isActiveRef.current && !isSpeakingRef.current) startRecognitionRef.current();
         }, 300);
@@ -223,7 +230,9 @@ export default function VoiceAI({ context }) {
         setPhase('idle');
         return;
       }
-      setPhase('idle');
+      // Recoverable error (e.g. "no-speech", "network") — silently retry
+      // without flashing the idle/"tap to speak" state; same reasoning as
+      // the empty-transcript branch above.
       setTimeout(() => {
         if (isActiveRef.current && !isSpeakingRef.current) startRecognitionRef.current();
       }, 500);

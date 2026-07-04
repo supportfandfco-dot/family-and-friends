@@ -255,7 +255,14 @@ export async function sendMessage(chatId, senderId, content, type = 'text', extr
     if (uid !== senderId) updates[`unread.${uid}`] = increment(1);
   });
 
-  await setDoc(doc(db, 'chats', chatId), updates, { merge: true });
+  // updateDoc (not setDoc+merge) — increment() and dot-notation nested
+  // field paths ("unread.uid") are only reliably supported by updateDoc.
+  // setDoc(ref, data, {merge:true}) only guarantees TOP-LEVEL field
+  // merging; a dotted string key like "unread.uid" can silently land as a
+  // literal field named "unread.uid" instead of incrementing the nested
+  // unread map — which is exactly why unread counts never showed anywhere
+  // even though messages were sending fine.
+  await updateDoc(doc(db, 'chats', chatId), updates);
   return msgRef.id;
 }
 
@@ -300,12 +307,16 @@ export function subscribeToChats(uid, callback) {
 
 // ── Group helpers ──────────────────────────────────────────────
 export async function createGroup(name, adminId, memberIds, photoURL = null) {
+  const members = [adminId, ...memberIds];
+  const unread = {};
+  members.forEach(id => { unread[id] = 0; });
   const groupRef = await addDoc(collection(db, 'groups'), {
     name, adminId, photoURL,
-    members: [adminId, ...memberIds],
+    members,
     createdAt: serverTimestamp(),
     lastMessage: null,
-    description: ''
+    description: '',
+    unread
   });
   return groupRef.id;
 }
@@ -339,7 +350,7 @@ export async function sendGroupMessage(groupId, senderId, content, type = 'text'
   });
 
 
-  await setDoc(doc(db, 'groups', groupId), updates, { merge: true });
+  await updateDoc(doc(db, 'groups', groupId), updates);
   return msgRef.id;
 }
 
