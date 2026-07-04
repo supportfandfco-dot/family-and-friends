@@ -287,12 +287,19 @@ export async function sendMessage(chatId, senderId, content, type = 'text', extr
 }
 
 export function subscribeToMessages(chatId, callback) {
-  // Initial page: last 60 messages — enough to fill any screen
+  // Fetch the NEWEST 60 messages, not the oldest. orderBy('timestamp','asc')
+  // + limit(60) actually pins to the OLDEST 60 docs in the whole chat — for
+  // any conversation past 60 total messages, that fixed window never has
+  // room for anything sent afterward, so new messages silently never
+  // appeared in the live listener no matter how many were sent. Fetch
+  // descending (newest first) + limit, then reverse to ascending for
+  // display — same pattern loadOlderMessages() below already uses
+  // correctly for pagination.
   const q = query(
     collection(db, 'chats', chatId, 'messages'),
-    orderBy('timestamp', 'asc'), limit(60)
+    orderBy('timestamp', 'desc'), limit(60)
   );
-  return onSnapshot(q, snap => callback(snap.docs.map(d => ({ id: d.id, ...d.data() }))));
+  return onSnapshot(q, snap => callback(snap.docs.reverse().map(d => ({ id: d.id, ...d.data() }))));
 }
 
 // Load an older page — call when user scrolls to top
@@ -390,11 +397,15 @@ export async function resetUnreadCount(chatId, uid, isGroup = false) {
 }
 
 export function subscribeToGroupMessages(groupId, callback) {
+  // Same fix as subscribeToMessages() above — this one was missed when that
+  // fix was applied, so any group past 60 total messages never showed
+  // anything sent afterward. Fetch newest 60 (desc) then reverse to
+  // ascending for display.
   const q = query(
     collection(db, 'groups', groupId, 'messages'),
-    orderBy('timestamp', 'asc'), limit(60)
+    orderBy('timestamp', 'desc'), limit(60)
   );
-  return onSnapshot(q, snap => callback(snap.docs.map(d => ({ id: d.id, ...d.data() }))));
+  return onSnapshot(q, snap => callback(snap.docs.reverse().map(d => ({ id: d.id, ...d.data() }))));
 }
 
 export async function updateGroupDescription(groupId, description) {
@@ -528,7 +539,7 @@ export async function markMessagesRead(chatId, uid, isGroup = false) {
   const col = isGroup ? 'groups' : 'chats';
   try {
     resetUnreadCount(chatId, uid, isGroup);
-    const q = query(collection(db, col, chatId, 'messages'), orderBy('timestamp', 'asc'), limit(200));
+    const q = query(collection(db, col, chatId, 'messages'), orderBy('timestamp', 'desc'), limit(200));
     const snap = await getDocs(q);
     const batch = writeBatch(db);
     snap.docs.forEach(d => {
@@ -616,7 +627,7 @@ export async function unblockUser(uid, targetUid) {
 export async function clearChat(chatId, uid, isGroup = false) {
   const col = isGroup ? 'groups' : 'chats';
   try {
-    const q = query(collection(db, col, chatId, 'messages'), orderBy('timestamp'), limit(500));
+    const q = query(collection(db, col, chatId, 'messages'), orderBy('timestamp', 'desc'), limit(500));
     const snap = await getDocs(q);
     const batch = writeBatch(db);
     snap.docs.forEach(d => batch.update(d.ref, { deletedFor: arrayUnion(uid) }));
@@ -797,6 +808,12 @@ export async function createGroupCall(groupId, groupName, initiatorId, initiator
 // same WebRTC signaling document without any invite mechanism.
 export async function createGroupCallWithId(callId, groupName, initiatorId, initiatorName, type) {
   try {
+    // arrayUnion, not a plain [initiatorId] literal — a participant can have
+    // already auto-joined (see joinGroupCallDoc) if they were admitted in
+    // the lobby before the host clicked "Start Video Feed". A plain array
+    // literal here would silently overwrite and erase that participant the
+    // moment the host actually starts, permanently stranding them even
+    // after the joinGroupCallDoc race fix.
     await setDoc(doc(db, 'groupCalls', callId), {
       groupId: callId,
       groupName,
@@ -804,7 +821,7 @@ export async function createGroupCallWithId(callId, groupName, initiatorId, init
       initiatorName,
       type,
       status: 'ringing',
-      participants: [initiatorId],
+      participants: arrayUnion(initiatorId),
       invitedMembers: [],
       isMeeting: true,
       createdAt: serverTimestamp(),
@@ -814,12 +831,25 @@ export async function createGroupCallWithId(callId, groupName, initiatorId, init
 }
 
 export async function joinGroupCallDoc(callId, uid) {
+  // setDoc+merge (upsert), not updateDoc. In the meeting flow, a host
+  // admitting someone in the lobby (meetings/{code}) is a completely
+  // separate action from the host clicking "Start Video Feed" (which is
+  // what actually creates this groupCalls/{callId} doc via
+  // createGroupCallWithId). If the participant gets admitted and
+  // auto-joins BEFORE the host has started their video feed, updateDoc()
+  // would throw "no document to exist" — silently swallowed by the old
+  // try/catch — and the participant's join was lost forever, with no
+  // retry, permanently stuck at 1 participant. That's why the host's
+  // "Calling..." never cleared, independent of ICE/network entirely.
+  // arrayUnion/arrayRemove on a top-level field (not a dotted nested path)
+  // works correctly with setDoc+merge, unlike the dotted-path case
+  // documented elsewhere in this file.
   try {
-    await updateDoc(doc(db, 'groupCalls', callId), {
+    await setDoc(doc(db, 'groupCalls', callId), {
       participants: arrayUnion(uid),
       invitedMembers: arrayRemove(uid),
       status: 'active',
-    });
+    }, { merge: true });
   } catch {}
 }
 
