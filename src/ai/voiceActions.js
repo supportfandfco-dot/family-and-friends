@@ -27,6 +27,22 @@ If the user is asking to create/add a task, reminder, or to-do item, respond:
 Otherwise (general question, conversation, anything else), respond:
 {"intent":"none"}`;
 
+// Cheap local pre-filter — checked before ever calling the LLM classifier.
+// Every single voice utterance used to pay for a full network round-trip
+// to askFast() just to be classified, even plain conversational questions
+// that were never going to be a task. That's a wasted ~300-800ms on the
+// common case. Only utterances that plausibly resemble a task/reminder
+// request go on to the real (still LLM-based, still accurate) classifier;
+// everything else skips straight to overlayAsk with zero extra latency.
+const TASK_HINT_WORDS = [
+  'remind', 'reminder', 'task', 'to-do', 'todo', "don't forget", 'dont forget',
+  'add a task', 'add task', 'schedule', 'remember to', 'note to self',
+];
+function looksLikeTaskRequest(utterance) {
+  const t = utterance.toLowerCase();
+  return TASK_HINT_WORDS.some(w => t.includes(w));
+}
+
 /**
  * Attempts to detect and execute a real action from a voice utterance.
  * Returns { handled: true, responseText } if an action was executed,
@@ -34,6 +50,7 @@ Otherwise (general question, conversation, anything else), respond:
  */
 export async function tryExecuteVoiceAction(utterance, uid) {
   if (!uid || !utterance?.trim()) return { handled: false };
+  if (!looksLikeTaskRequest(utterance)) return { handled: false };
 
   let raw;
   try {

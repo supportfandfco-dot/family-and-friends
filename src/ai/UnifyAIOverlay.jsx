@@ -5,7 +5,7 @@
 import { useState, useRef, useEffect, useCallback } from 'react';
 import { X, Send, Sparkles, Cpu } from 'lucide-react';
 import useAIStore from './useAIStore';
-import { overlayAsk, unifiedAnswer } from './unifyService';
+import { overlayAsk, unifiedAnswer, buildChatContextString } from './unifyService';
 import { localChatSummary, analyzeConversationMood, extractKeywords } from './localIntelligence.js';
 import { shouldSynthesize } from './aiRouter.js';
 
@@ -134,14 +134,7 @@ export default function UnifyAIOverlay() {
   useEffect(() => { if (overlayOpen) setTimeout(() => inputRef.current?.focus(), 300); }, [overlayOpen]);
   useEffect(() => { bottomRef.current?.scrollIntoView({ behavior: 'smooth' }); }, [overlayHistory, streamText]);
 
-  const buildContext = useCallback(() => {
-    if (!overlayContext?.data?.messages?.length) return null;
-    const { type, data } = overlayContext;
-    const recent = data.messages.slice(-15)
-      .map(m => `${m.senderName || 'User'}: ${m.content?.slice(0,150) || '[media]'}`)
-      .join('\n');
-    return `${type === 'group' ? 'Group' : 'Chat'} "${data.partnerName || data.groupName || ''}":\n${recent}`;
-  }, [overlayContext]);
+  const buildContext = useCallback(() => buildChatContextString(overlayContext), [overlayContext]);
 
   // Build an instant local answer for common questions
   const buildLocalAnswer = useCallback((question) => {

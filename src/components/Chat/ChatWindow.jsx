@@ -1002,7 +1002,7 @@ export default function ChatWindow({ chatPartner, onBack, onVoiceCall, onVideoCa
   });
 
   const handleOpenOverlay = () => openOverlay(getAIContext());
-  const handleOpenVoice   = () => openVoiceAI();
+  const handleOpenVoice   = () => openVoiceAI(getAIContext());
 
   const handleSummarize = async () => {
     setShowMenu(false);

@@ -750,7 +750,7 @@ export function GroupChatWindow({ group: initialGroup, onBack, contacts: propCon
           groupPulse, setGroupPulse, clearGroupPulse,
           getSummaryCache, setSummaryCache } = useAIStore();
 
-  const handleOpenGroupOverlay = () => openOverlay({
+  const getGroupAIContext = () => ({
     type: 'group',
     data: {
       messages: messages.map(m => ({
@@ -762,6 +762,8 @@ export function GroupChatWindow({ group: initialGroup, onBack, contacts: propCon
       groupId: group?.id,
     },
   });
+
+  const handleOpenGroupOverlay = () => openOverlay(getGroupAIContext());
 
   const handleGroupSummarize = async () => {
     setShowMenu(false);
@@ -1374,7 +1376,7 @@ export function GroupChatWindow({ group: initialGroup, onBack, contacts: propCon
             myName={profile?.name}
             onReply={r => setText(r)}
             onOpenOverlay={handleOpenGroupOverlay}
-            onOpenVoice={() => openVoiceAI()}
+            onOpenVoice={() => openVoiceAI(getGroupAIContext())}
             context={{ groupId: group?.id }}
           />
         </div>

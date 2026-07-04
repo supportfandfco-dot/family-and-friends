@@ -30,11 +30,15 @@ const useAIStore = create(subscribeWithSelector((set, get) => ({
 
   // ── Voice AI ─────────────────────────────────────────────
   voiceAIOpen: false,
+  voiceContext: null,
   voiceTranscript: '',
   voiceResponse: '',
   voiceListening: false,
-  openVoiceAI:        () => set({ voiceAIOpen: true, voiceTranscript: '', voiceResponse: '' }),
-  closeVoiceAI:       () => set({ voiceAIOpen: false, voiceTranscript: '', voiceResponse: '', voiceListening: false }),
+  // ctx is the SAME {type, data:{messages, partnerName|groupName, ...}}
+  // shape the text overlay uses (see getAIContext() in ChatWindow/
+  // GroupChat) — this is what gives Voice AI real chat awareness.
+  openVoiceAI:        (ctx = null) => set({ voiceAIOpen: true, voiceContext: ctx, voiceTranscript: '', voiceResponse: '' }),
+  closeVoiceAI:       () => set({ voiceAIOpen: false, voiceContext: null, voiceTranscript: '', voiceResponse: '', voiceListening: false }),
   setVoiceTranscript: (t) => set({ voiceTranscript: t }),
   setVoiceResponse:   (t) => set({ voiceResponse: t }),
   setVoiceListening:  (v) => set({ voiceListening: v }),

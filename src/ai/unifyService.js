@@ -24,6 +24,22 @@ export const MODELS = {
   groq_analytical: { id: 'groq_analytical', label: 'DeepSeek R1',sublabel: 'Groq', color: '#06b6d4', icon: '◉' },
 };
 
+// ── Shared chat-context string builder ─────────────────────────
+// Single source of truth for turning an overlay/voice context object
+// ({type, data:{messages, partnerName|groupName, ...}}) into the transcript
+// string TEMPLATES.overlayQuestion embeds in the prompt. Used identically
+// by UnifyAIOverlay (text) and VoiceAI (voice) so a chat-aware question
+// gets the exact same context — and therefore the same answer quality —
+// regardless of which surface asked it.
+export function buildChatContextString(overlayContext) {
+  if (!overlayContext?.data?.messages?.length) return null;
+  const { type, data } = overlayContext;
+  const recent = data.messages.slice(-15)
+    .map(m => `${m.senderName || 'User'}: ${m.content?.slice(0, 150) || '[media]'}`)
+    .join('\n');
+  return `${type === 'group' ? 'Group' : 'Chat'} "${data.partnerName || data.groupName || ''}":\n${recent}`;
+}
+
 // ── Core ask — picks model, handles fallback ──────────────────
 async function askGroq(prompt, systemPrompt, signal) {
   const model = pickModel(prompt);

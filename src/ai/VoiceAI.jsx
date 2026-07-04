@@ -16,7 +16,7 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
 import { X, Mic, MicOff, Sparkles } from 'lucide-react';
 import useAIStore from './useAIStore';
-import { overlayAsk } from './unifyService';
+import { overlayAsk, buildChatContextString } from './unifyService';
 import { tryExecuteVoiceAction } from './voiceActions';
 import { useAuth } from '../contexts/AuthContext';
 
@@ -55,10 +55,10 @@ function waitForVoices() {
 // transcript -> router -> Groq -> synthesis -> restart) from the console.
 function vlog(...args) { console.log('[VOICE]', ...args); }
 
-export default function VoiceAI({ context }) {
+export default function VoiceAI() {
   const { user } = useAuth();
   const {
-    voiceAIOpen, closeVoiceAI,
+    voiceAIOpen, closeVoiceAI, voiceContext,
     voiceTranscript, setVoiceTranscript,
     voiceResponse,  setVoiceResponse,
     voiceListening, setVoiceListening,
@@ -75,11 +75,16 @@ export default function VoiceAI({ context }) {
   const isProcessingRef = useRef(false);
   const isActiveRef     = useRef(false);
   const mutedRef        = useRef(false);
-  const contextRef      = useRef(context);
+  const contextRef      = useRef(voiceContext);
   // True between the recognizer's onstart and onend/onerror — lets us tell
   // whether the mic is already live (e.g. as a barge-in listener during TTS)
   // before ever attempting a second, conflicting rec.start() call.
   const isRecognitionActiveRef = useRef(false);
+  // Rolling within-session voice exchange history (last few Q&A turns) —
+  // gives continuous, human-like conversation memory across turns instead
+  // of treating every utterance as a fresh, isolated question. Cleared
+  // whenever the overlay closes (see the voiceAIOpen effect below).
+  const voiceHistoryRef = useRef([]);
 
   // Refs that always point to the LATEST function — read inside
   // the recognizer's event handlers, which are otherwise frozen
@@ -88,7 +93,7 @@ export default function VoiceAI({ context }) {
   const startRecognitionRef = useRef(() => {});
 
   useEffect(() => { mutedRef.current = muted; }, [muted]);
-  useEffect(() => { contextRef.current = context; }, [context]);
+  useEffect(() => { contextRef.current = voiceContext; }, [voiceContext]);
 
   // ── Speak AI response, then restart listening ───────────
   // Gemini-Live-style barge-in: the mic is started IN PARALLEL with TTS
@@ -163,11 +168,17 @@ export default function VoiceAI({ context }) {
     // Check if this is a real actionable request (e.g. "add a task to...")
     // before falling through to plain conversation. This is what makes
     // Voice AI actually DO things instead of just talking about them.
+    // voiceActions.js does a cheap local keyword check before ever calling
+    // the LLM classifier, so ordinary conversation doesn't pay for an
+    // extra network round-trip it doesn't need — this is the "smarter
+    // model routing" latency fix.
     try {
       const action = await tryExecuteVoiceAction(question, user?.uid);
       if (action.handled) {
         vlog('Handled as voice action:', action.responseText?.slice(0, 60));
         setVoiceResponse(action.responseText);
+        voiceHistoryRef.current.push({ q: question, a: action.responseText });
+        voiceHistoryRef.current = voiceHistoryRef.current.slice(-5);
         isProcessingRef.current = false;
         await speak(action.responseText);
         return;
@@ -176,9 +187,22 @@ export default function VoiceAI({ context }) {
       // Action detection failed — fall through to normal conversation
     }
 
+    // Real chat awareness: the same {type, data:{messages, partnerName |
+    // groupName}} object the text overlay uses, turned into the identical
+    // transcript string via the shared buildChatContextString() — so a
+    // chat-aware question gets the same answer whether typed or spoken.
+    const chatContext = buildChatContextString(contextRef.current);
+    // Plus rolling voice-session memory, so "what about tomorrow instead"
+    // as a follow-up actually resolves against what was just said, rather
+    // than being treated as an isolated, context-free question.
+    const recentVoiceTurns = voiceHistoryRef.current.length
+      ? `Recent voice exchange:\n${voiceHistoryRef.current.map(t => `User: ${t.q}\nAssistant: ${t.a}`).join('\n')}`
+      : null;
+    const combinedContext = [chatContext, recentVoiceTurns].filter(Boolean).join('\n\n') || null;
+
     await overlayAsk({
       question,
-      context: contextRef.current || null,
+      context: combinedContext,
       signal:  abortRef.current.signal,
       onProgress: () => {},
       onDone: async (full) => {
@@ -191,6 +215,8 @@ export default function VoiceAI({ context }) {
         }
         vlog('Groq responding:', full.slice(0, 60));
         setVoiceResponse(full);
+        voiceHistoryRef.current.push({ q: question, a: full });
+        voiceHistoryRef.current = voiceHistoryRef.current.slice(-5);
         isProcessingRef.current = false;
         await speak(full);
       },
@@ -338,6 +364,7 @@ export default function VoiceAI({ context }) {
       isSpeakingRef.current = false;
       isProcessingRef.current = false;
       isRecognitionActiveRef.current = false;
+      voiceHistoryRef.current = [];
       setPhase('idle');
       setError(null);
       return;
