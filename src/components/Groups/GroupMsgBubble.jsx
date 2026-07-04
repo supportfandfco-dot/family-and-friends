@@ -6,13 +6,14 @@ import { useRef, memo } from 'react';
 import { Check, CheckCheck, Trash2, Share2, ZoomIn, FileText } from 'lucide-react';
 import { Crown } from 'lucide-react';
 import { VoiceMessage } from '../Chat/VoiceNote';
+import { formatMsgTime } from '../../utils/timestamp';
 
 export const GroupMsgBubble = memo(function GroupMsgBubble({ msg, isOwn, sender, isAdmin, onLongPress, onReaction, selected, selectionMode, onSelect, onImageClick }) {
   const timerRef  = useRef(null);
   const isDeleted = msg.type === 'deleted';
   const isSystem  = msg.type === 'system';
   const hasReactions = msg.reactions && Object.keys(msg.reactions).some(e => msg.reactions[e]?.length > 0);
-  const ts = msg.timestamp?.toDate ? msg.timestamp.toDate().toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'}) : '';
+  const ts = formatMsgTime(msg.timestamp);
 
   const onDown = () => { timerRef.current = setTimeout(() => { if(selectionMode) onSelect(msg); else onLongPress(msg); }, 480); };
   const onUp = () => clearTimeout(timerRef.current);

@@ -14,6 +14,7 @@ import {
   collection, query, where, orderBy, limit, getDocs, onSnapshot,
 } from 'firebase/firestore';
 import { askDeep } from '../ai/groqClient';
+import { toMs } from '../utils/timestamp';
 
 // ── Tuneable constants ────────────────────────────────────────
 const GROQ_THRESHOLD   = 0.40;  // local confidence must exceed this to call Groq
@@ -83,11 +84,10 @@ function looksLikeQuestion(text = '') {
   return /^(what|when|where|who|why|how|could|would|can|will|shall|should|is|are|do|did|have|has)\b/i.test(t);
 }
 
-function toMs(ts) {
-  if (!ts) return 0;
-  if (ts.seconds) return ts.seconds * 1000;
-  return Number(ts);
-}
+// toMs is now the shared helper from utils/timestamp.js — the local copy
+// here did `Number(ts)` as its string fallback, which returns NaN for an
+// ISO string (e.g. "2026-07-04T12:34:56.789Z"), silently breaking reply-time
+// detection and message sorting once message timestamps became ISO strings.
 
 // ── Batched Groq extractor ────────────────────────────────────
 // Takes up to BATCH_SIZE messages, runs ONE Groq call for all of them

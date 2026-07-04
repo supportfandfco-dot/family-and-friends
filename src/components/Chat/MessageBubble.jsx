@@ -5,6 +5,7 @@
 import { useState, useRef, useEffect, memo } from 'react';
 import { Check, CheckCheck, Trash2, Share2, Edit3, FileText, ZoomIn } from 'lucide-react';
 import { VoiceMessage } from './VoiceNote';
+import { formatMsgTime } from '../../utils/timestamp';
 
 const QUICK_REACTIONS = ['❤️','😂','😮','😢','😡','👍','👎','🙏'];
 
@@ -27,9 +28,7 @@ function getBubbleRadius(own, shape) {
 }
 
 function getTimestamp(msg) {
-  return msg.timestamp?.toDate
-    ? msg.timestamp.toDate().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
-    : '';
+  return formatMsgTime(msg.timestamp);
 }
 
 // ── LazyImage — only loads when in viewport ─────────────

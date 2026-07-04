@@ -234,9 +234,18 @@ export async function getOrCreateChat(uid1, uid2) {
 
 export async function sendMessage(chatId, senderId, content, type = 'text', extra = {}, senderName = '') {
   // Fire-and-forget the message doc — don't block on it
+  // timestamp is a client ISO string, NOT serverTimestamp(). subscribeToMessages
+  // does orderBy('timestamp','asc') — Firestore's local query engine excludes a
+  // document from an ORDERED onSnapshot query's results while its orderBy field
+  // is still a pending, unconfirmed serverTimestamp(). That's exactly why a
+  // freshly sent message (especially the sender's own) wouldn't show up in the
+  // chat window until the server round-trip completed — sometimes visibly
+  // delayed, sometimes appearing to just never show on a slow connection. Same
+  // class of bug already fixed for Moments; this was the one place it was
+  // missed for actual chat messages.
   const msgRef = await addDoc(collection(db, 'chats', chatId, 'messages'), {
     senderId, content, type,
-    timestamp: serverTimestamp(),
+    timestamp: new Date().toISOString(),
     status: 'sent',
     reactions: {},
     ...extra
@@ -246,23 +255,34 @@ export async function sendMessage(chatId, senderId, content, type = 'text', extr
   // senderName passed in by caller if available, otherwise we skip the profile lookup
   const participantIds = chatId.split('_').filter(Boolean);
 
-  const updates = {
+  const chatRef = doc(db, 'chats', chatId);
+
+  // Step 1: upsert lastMessage with setDoc+merge. This is a plain
+  // top-level field (no dot-path/increment involved), and setDoc+merge
+  // creates the doc if it's somehow not there yet — e.g. a brand-new
+  // conversation where getOrCreateChat's write hasn't fully committed
+  // before this fires. Guarantees the chat always shows up with its
+  // preview, even in that race.
+  await setDoc(chatRef, {
     lastMessage: { content, type, senderId, senderName, timestamp: serverTimestamp(), id: msgRef.id }
-  };
+  }, { merge: true });
 
-  // Increment unread for all participants except sender
+  // Step 2: atomically increment unread for all participants except
+  // sender. updateDoc (not setDoc+merge) because increment() and
+  // dot-notation nested field paths ("unread.uid") are only reliably
+  // supported by updateDoc — setDoc+merge can silently write a literal
+  // "unread.uid" field instead of touching the nested map. Split into its
+  // own call and wrapped so a failure here (rare — the doc now definitely
+  // exists after step 1) never blocks the message itself from sending or
+  // showing up.
+  const unreadUpdates = {};
   participantIds.forEach(uid => {
-    if (uid !== senderId) updates[`unread.${uid}`] = increment(1);
+    if (uid !== senderId) unreadUpdates[`unread.${uid}`] = increment(1);
   });
+  if (Object.keys(unreadUpdates).length) {
+    try { await updateDoc(chatRef, unreadUpdates); } catch {}
+  }
 
-  // updateDoc (not setDoc+merge) — increment() and dot-notation nested
-  // field paths ("unread.uid") are only reliably supported by updateDoc.
-  // setDoc(ref, data, {merge:true}) only guarantees TOP-LEVEL field
-  // merging; a dotted string key like "unread.uid" can silently land as a
-  // literal field named "unread.uid" instead of incrementing the nested
-  // unread map — which is exactly why unread counts never showed anywhere
-  // even though messages were sending fine.
-  await updateDoc(doc(db, 'chats', chatId), updates);
   return msgRef.id;
 }
 
@@ -327,9 +347,10 @@ export function subscribeToGroups(uid, callback) {
 }
 
 export async function sendGroupMessage(groupId, senderId, content, type = 'text', extra = {}, groupMembers = [], senderName = '') {
+  // ISO string, not serverTimestamp() — see sendMessage() above for why.
   const msgRef = await addDoc(collection(db, 'groups', groupId, 'messages'), {
     senderId, content, type,
-    timestamp: serverTimestamp(),
+    timestamp: new Date().toISOString(),
     reactions: {},
     seenBy: [senderId],
     ...extra
@@ -338,19 +359,24 @@ export async function sendGroupMessage(groupId, senderId, content, type = 'text'
   // Use passed senderName — avoids extra Firestore read on every message send
   if (!senderName) senderName = extra.senderName || '';
 
-  const updates = {
+  const groupRef = doc(db, 'groups', groupId);
+
+  // Same two-step pattern as sendMessage: upsert lastMessage first (safe,
+  // creates the doc if a race left it not-yet-committed), then atomically
+  // increment unread separately so a rare increment failure never blocks
+  // the message from sending or showing up.
+  await setDoc(groupRef, {
     lastMessage: { content, type, senderId, senderName, timestamp: serverTimestamp(), id: msgRef.id }
-  };
+  }, { merge: true });
 
-  // Increment unread for all members except sender
+  const unreadUpdates = {};
   groupMembers.forEach(memberId => {
-    if (memberId !== senderId) {
-      updates[`unread.${memberId}`] = increment(1);
-    }
+    if (memberId !== senderId) unreadUpdates[`unread.${memberId}`] = increment(1);
   });
+  if (Object.keys(unreadUpdates).length) {
+    try { await updateDoc(groupRef, unreadUpdates); } catch {}
+  }
 
-
-  await updateDoc(doc(db, 'groups', groupId), updates);
   return msgRef.id;
 }
 
@@ -382,7 +408,7 @@ export async function addGroupMember(groupId, newMemberId, adminName, newMemberN
       senderId: 'system',
       content: `${newMemberName} was added by ${adminName}`,
       type: 'system',
-      timestamp: serverTimestamp(),
+      timestamp: new Date().toISOString(),
       reactions: {},
       seenBy: []
     });
@@ -399,7 +425,7 @@ export async function removeGroupMember(groupId, memberId, adminId, adminName, m
       senderId: 'system',
       content: `${memberName} was removed by ${adminName}`,
       type: 'system',
-      timestamp: serverTimestamp(),
+      timestamp: new Date().toISOString(),
       reactions: {},
       seenBy: [adminId]
     });
@@ -418,7 +444,7 @@ export async function exitGroupWithNotice(groupId, uid, userName, isAdmin = fals
       senderId: 'system',
       content: `${userName} left the group`,
       type: 'system',
-      timestamp: serverTimestamp(),
+      timestamp: new Date().toISOString(),
       reactions: {},
       seenBy: []
     });

@@ -34,6 +34,7 @@ import { summarizeMessages, askUnify } from '../../ai/unifyService';
 import MediaGallery from './MediaGallery';
 import VirtualMessageList from './VirtualMessageList';
 import useMessageSearch from '../../hooks/useMessageSearch';
+import { formatMsgTime } from '../../utils/timestamp';
 
 // ── Emoji data ─────────────────────────────────────────
 const EMOJI_CATEGORIES = {
@@ -769,9 +770,7 @@ export default function ChatWindow({ chatPartner, onBack, onVoiceCall, onVideoCa
       content: m.content,
       fileName: m.fileName || 'photo.jpg',
       senderName: m.senderId === user.uid ? 'You' : chatPartner?.name || 'Them',
-      ts: m.timestamp?.toDate
-        ? m.timestamp.toDate().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
-        : '',
+      ts: formatMsgTime(m.timestamp),
     }));
     const startIndex = imgMsgs.findIndex(m => m.id === clickedMsg.id);
     setPhotoViewer({ images: imgs, startIndex: Math.max(0, startIndex) });

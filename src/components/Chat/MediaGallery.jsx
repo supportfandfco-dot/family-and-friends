@@ -6,6 +6,7 @@ import { db } from '../../firebase';
 import { collection, query, where, orderBy, getDocs, limit } from 'firebase/firestore';
 import { X, Image, Download } from 'lucide-react';
 import { format } from 'date-fns';
+import { toMs } from '../../utils/timestamp';
 
 function downloadImg(url, name = 'image.jpg') {
   const a = document.createElement('a');
@@ -39,7 +40,7 @@ export default function MediaGallery({ chatId, isGroup, onClose, onViewImage }) 
   // Group by month
   const grouped = {};
   media.forEach(m => {
-    const ts = m.timestamp?.seconds ? m.timestamp.seconds * 1000 : Date.now();
+    const ts = toMs(m.timestamp) || Date.now();
     const key = format(new Date(ts), 'MMMM yyyy');
     if (!grouped[key]) grouped[key] = [];
     grouped[key].push(m);

@@ -33,6 +33,7 @@ import MediaIntelligence from '../../ai/MediaIntelligence';
 import useAIStore from '../../ai/useAIStore';
 import { analyzeGroupPulse, summarizeMessages, askUnify } from '../../ai/unifyService';
 import CameraCapture from '../Camera/CameraCapture';
+import { formatMsgTime } from '../../utils/timestamp';
 
 // ── Shared emoji data ──────────────────────────────────
 const EMOJI_CATEGORIES = {
@@ -957,9 +958,7 @@ export function GroupChatWindow({ group: initialGroup, onBack, contacts: propCon
         content: m.content,
         fileName: m.fileName || 'photo.jpg',
         senderName: m.senderId === user.uid ? 'You' : (memberProfiles[m.senderId]?.name || 'Member'),
-        ts: m.timestamp?.toDate
-          ? m.timestamp.toDate().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
-          : '',
+        ts: formatMsgTime(m.timestamp),
       }));
     const imgMsgs = visibleMsgs.filter(m => m.type === 'image' && m.content);
     const startIndex = imgMsgs.findIndex(m => m.id === clickedMsg.id);
