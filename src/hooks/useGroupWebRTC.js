@@ -187,6 +187,7 @@ export function useGroupWebRTC(currentUserId) {
     pc.ontrack = (e) => {
       if (e.streams?.[0]) {
         vlog('Remote stream received', peerUid);
+        document.title = 'CHECKPOINT-SUCCESS-remoteStreamReceived';
         setRemoteStreams(prev => ({ ...prev, [peerUid]: e.streams[0] }));
       }
     };
@@ -206,6 +207,7 @@ export function useGroupWebRTC(currentUserId) {
     // explicit restartIce() attempt at all.
     pc.oniceconnectionstatechange = () => {
       vlog('ICE connection state', peerUid, pc.iceConnectionState);
+      document.title = 'CHECKPOINT-ICE-' + pc.iceConnectionState;
       if (pc.iceConnectionState === 'disconnected') {
         // Grace period — give it a chance to recover on its own before
         // trying anything, and before ever tearing down the UI.
@@ -382,11 +384,14 @@ export function useGroupWebRTC(currentUserId) {
     setGcType(type);
     setGcInfo({ id: meetingCode, name: meetingName });
     setGcStatus('waiting');
+    document.title = 'CHECKPOINT-1-startMeetingCall-entered';
 
     try {
       await getLocalStream(type === 'video');
+      document.title = 'CHECKPOINT-2-gotLocalStream';
 
       const cid = await createGroupCallWithId(meetingCode, meetingName, uid, callerName || 'Host', type);
+      document.title = 'CHECKPOINT-3-callDocCreated';
       vlog('Meeting started by host', cid);
       setGcCallId(cid);
 
@@ -408,6 +413,7 @@ export function useGroupWebRTC(currentUserId) {
       } catch (e) { console.error('[MEETING] Could not read existing participants on start', e); }
       existing = existing.filter(p => p !== uid);
       setGcParticipants([uid, ...existing]);
+      document.title = 'CHECKPOINT-4-readExisting-' + existing.length;
 
       listenForOffers(cid);
       watchCallDoc(cid);
@@ -421,7 +427,9 @@ export function useGroupWebRTC(currentUserId) {
         timerRef.current = setInterval(() => setCallDuration(d => d + 1), 1000);
       }
       setGcStatus('active');
+      document.title = 'CHECKPOINT-5-startMeetingCall-COMPLETE';
     } catch (e) {
+      document.title = 'CHECKPOINT-ERROR-' + (e?.message || 'unknown');
       cleanup();
       throw e;
     }
@@ -436,9 +444,11 @@ export function useGroupWebRTC(currentUserId) {
     setGcInfo({ id: meetingCode, name: meetingName });
     setGcStatus('active');
     setGcCallId(meetingCode);
+    document.title = 'CHECKPOINT-J1-joinMeetingCall-entered';
 
     try {
       await getLocalStream(type === 'video');
+      document.title = 'CHECKPOINT-J2-gotLocalStream';
 
       // Read current participants before joining, so we know who to offer to
       let existing = [];
@@ -448,8 +458,10 @@ export function useGroupWebRTC(currentUserId) {
         });
         existing = (snap.exists() ? snap.data()?.participants : []) || [];
       } catch {}
+      document.title = 'CHECKPOINT-J3-readExisting-' + existing.length;
 
       await joinGroupCallDoc(meetingCode, uid);
+      document.title = 'CHECKPOINT-J4-joinedCallDoc';
       vlog('User joined meeting', { meetingCode, uid, existingParticipants: existing });
       setGcParticipants([...existing.filter(p => p !== uid), uid]);
 
@@ -457,6 +469,7 @@ export function useGroupWebRTC(currentUserId) {
         vlog('Joiner offering to existing participant', peerUid);
         await offerToPeer(meetingCode, peerUid);
       }
+      document.title = 'CHECKPOINT-J5-offeredExisting';
 
       listenForOffers(meetingCode);
       watchCallDoc(meetingCode);
@@ -464,7 +477,9 @@ export function useGroupWebRTC(currentUserId) {
       if (!timerRef.current) {
         timerRef.current = setInterval(() => setCallDuration(d => d + 1), 1000);
       }
+      document.title = 'CHECKPOINT-J6-joinMeetingCall-COMPLETE';
     } catch (e) {
+      document.title = 'CHECKPOINT-JERROR-' + (e?.message || 'unknown');
       cleanup();
       throw e;
     }
