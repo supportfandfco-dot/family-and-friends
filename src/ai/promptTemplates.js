@@ -72,8 +72,19 @@ Rules:
   synthesis: (question, responses) =>
     `You received these responses to: "${question.slice(0, 200)}"\n\n${responses}\n\nWrite ONE unified answer. Extract the strongest points. Remove repetition. Be concise. Do not mention sources or models. Start directly with the answer.`,
 
-  captionGenerate: () =>
+  // Used by the "UnifyAI Analysis" scanning feature — OCR/document/receipt
+  // extraction, NOT for writing captions.
+  mediaAnalyze: () =>
     'Extract intelligent data from this media. Provide OCR text if any, describe the scene, extract assignments/receipts if applicable, and summarize documents if present. Keep it concise.',
+
+  // Used by the "Generate Caption" button. Previously shared mediaAnalyze()'s
+  // prompt above, which asks for OCR/document extraction and scene
+  // description — that's why generated captions read like flat descriptions
+  // ("a photo of a dog on a beach") instead of an actual caption, and
+  // sometimes produced fragmented OCR-style text when the model tried to
+  // extract document/receipt data from a photo that had none.
+  captionWrite: () =>
+    'Write ONE short, catchy, natural-sounding social caption for this photo — the kind a person would actually post, not a description of what\'s in the image. Conversational tone, can be playful or clever if it fits the photo. No hashtags, no emojis unless they genuinely add something, no generic phrases like "a picture of" or "an image showing". Max 12 words. Return ONLY the caption text, nothing else.',
 
   captionEnhance: (caption) =>
     `Improve this caption to be more engaging: "${caption}". Max 12 words. Return ONLY the improved caption.`,

@@ -319,7 +319,7 @@ export async function analyzeImageBase64(base64Data, mimeType = 'image/jpeg', on
   let text;
   let failed = false;
   try {
-    text = await askVision(TEMPLATES.captionGenerate() + ' Also describe what you see in 2 sentences.', b64, mime, signal);
+    text = await askVision(TEMPLATES.mediaAnalyze() + ' Also describe what you see in 2 sentences.', b64, mime, signal);
     if (!text?.trim()) { text = 'Vision API returned an empty response.'; failed = true; }
   } catch (err) {
     if (err.name === 'AbortError') throw err;
@@ -344,7 +344,7 @@ export async function generateCaption(base64Data, mimeType = 'image/jpeg') {
   const mime = base64Data.startsWith('data:') ? base64Data.split(';')[0].split(':')[1] : mimeType;
   // Propagate the REAL error message — was being replaced with a generic
   // string that hid the actual cause (e.g. missing API key, quota, bad model).
-  const result = await askVision(TEMPLATES.captionGenerate(), b64, mime);
+  const result = await askVision(TEMPLATES.captionWrite(), b64, mime);
   if (!result?.trim()) throw new Error('Vision API returned an empty caption');
   return result;
 }
