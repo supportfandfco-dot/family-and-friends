@@ -527,6 +527,8 @@ function AppInner() {
           meetingCode={activeMeeting.code}
           isHost={activeMeeting.isHost}
           onStartCall={async () => {
+            // TEMPORARY DIAGNOSTIC — remove after confirming this fires.
+            alert('onStartCall reached, isHost=' + activeMeeting.isHost);
             const meetingName = `Meeting ${activeMeeting.code}`;
             // Root cause of the permanent "Calling..." hang: this used to call
             // checkMediaPermission(true) here FIRST — its own separate
