@@ -5,7 +5,7 @@
 
 import { useRef, useState, useCallback, useEffect } from 'react';
 import {
-  db, doc, onSnapshot,
+  db, doc, onSnapshot, getDoc,
   createGroupCall, createGroupCallWithId, joinGroupCallDoc, endGroupCallDoc,
   subscribeToGroupCallDoc, subscribeToGroupSignals,
   storeGroupOffer, storeGroupAnswer,
@@ -26,6 +26,12 @@ function stopStream(stream) {
   stream.getTracks().forEach(t => { try { t.stop(); t.enabled = false; } catch {} });
 }
 
+// Stage instrumentation for the meeting WebRTC pipeline — makes it possible
+// to see in the console exactly which stage a stuck call is failing at:
+// creation -> join -> offer -> answer -> ICE exchange -> connection state
+// -> ICE state -> remote stream.
+function vlog(...args) { console.log('[MEETING]', ...args); }
+
 export function useGroupWebRTC(currentUserId) {
   const [gcCallId,       setGcCallId]       = useState(null);
   const [gcStatus,       setGcStatus]       = useState('idle');   // idle|waiting|active
@@ -43,6 +49,7 @@ export function useGroupWebRTC(currentUserId) {
   const lastVideoEl     = useRef(null);  // persists even after component unmounts
   const pcsRef          = useRef({});
   const pendingCands    = useRef({});
+  const reconnectTimersRef = useRef({});
   const allUnsubsRef    = useRef([]);
   const signalUnsubRef  = useRef(null);
   const callDocUnsubRef = useRef(null);
@@ -63,10 +70,12 @@ export function useGroupWebRTC(currentUserId) {
     allUnsubsRef.current = [];
 
     Object.values(pcsRef.current).forEach(pc => {
-      try { pc.ontrack = pc.onicecandidate = pc.onconnectionstatechange = null; pc.close(); } catch {}
+      try { pc.ontrack = pc.onicecandidate = pc.onconnectionstatechange = pc.oniceconnectionstatechange = null; pc.close(); } catch {}
     });
     pcsRef.current   = {};
     pendingCands.current = {};
+    Object.values(reconnectTimersRef.current).forEach(t => clearTimeout(t));
+    reconnectTimersRef.current = {};
 
     // Detach srcObject BEFORE stopping tracks — camera LED turns off
     // Use lastVideoEl as backup because localVideoRef.current may be null after unmount
@@ -127,8 +136,9 @@ export function useGroupWebRTC(currentUserId) {
     const pc    = pcsRef.current[peerUid];
     const queue = pendingCands.current[peerUid] || [];
     if (!pc || !queue.length) return;
+    vlog('Draining pending ICE candidates', peerUid, queue.length);
     for (const c of queue) {
-      try { await pc.addIceCandidate(new RTCIceCandidate(c)); } catch {}
+      try { await pc.addIceCandidate(new RTCIceCandidate(c)); } catch (e) { console.error('[MEETING] addIceCandidate FAILED (pending)', peerUid, e); }
     }
     pendingCands.current[peerUid] = [];
   }, []);
@@ -139,7 +149,8 @@ export function useGroupWebRTC(currentUserId) {
       const pc = pcsRef.current[peerUid];
       if (!pc) return;
       if (pc.remoteDescription) {
-        try { await pc.addIceCandidate(new RTCIceCandidate(candidate)); } catch {}
+        try { await pc.addIceCandidate(new RTCIceCandidate(candidate)); }
+        catch (e) { console.error('[MEETING] addIceCandidate FAILED', peerUid, e); }
       } else {
         if (!pendingCands.current[peerUid]) pendingCands.current[peerUid] = [];
         pendingCands.current[peerUid].push(candidate);
@@ -161,6 +172,7 @@ export function useGroupWebRTC(currentUserId) {
 
     pc.ontrack = (e) => {
       if (e.streams?.[0]) {
+        vlog('Remote stream received', peerUid);
         setRemoteStreams(prev => ({ ...prev, [peerUid]: e.streams[0] }));
       }
     };
@@ -170,8 +182,42 @@ export function useGroupWebRTC(currentUserId) {
       addGroupIceCandidate(cid, uidRef.current, peerUid, e.candidate.toJSON()).catch(() => {});
     };
 
+    // ICE connection state — the actual NAT-traversal/connectivity signal.
+    // 'disconnected' is a NORMAL, often-transient state (a brief network
+    // blip, a dropped packet) — modern browsers attempt their own recovery
+    // automatically. Previously this code treated 'disconnected' the same
+    // as 'failed'/'closed' and immediately tore down the peer connection
+    // and removed the remote video — killing connections that would have
+    // self-healed within seconds, and any REAL failure never got an
+    // explicit restartIce() attempt at all.
+    pc.oniceconnectionstatechange = () => {
+      vlog('ICE connection state', peerUid, pc.iceConnectionState);
+      if (pc.iceConnectionState === 'disconnected') {
+        // Grace period — give it a chance to recover on its own before
+        // trying anything, and before ever tearing down the UI.
+        clearTimeout(reconnectTimersRef.current[peerUid]);
+        reconnectTimersRef.current[peerUid] = setTimeout(() => {
+          const stillPc = pcsRef.current[peerUid];
+          if (!stillPc) return;
+          if (stillPc.iceConnectionState === 'disconnected') {
+            vlog('Still disconnected after grace period — attempting ICE restart', peerUid);
+            try { stillPc.restartIce(); } catch {}
+          }
+        }, 4000);
+      } else if (pc.iceConnectionState === 'failed') {
+        vlog('ICE failed — attempting restart', peerUid);
+        try { pc.restartIce(); } catch {}
+      } else if (pc.iceConnectionState === 'connected' || pc.iceConnectionState === 'completed') {
+        clearTimeout(reconnectTimersRef.current[peerUid]);
+      }
+    };
+
     pc.onconnectionstatechange = () => {
-      if (['disconnected', 'failed', 'closed'].includes(pc.connectionState)) {
+      vlog('Peer connection state changed', peerUid, pc.connectionState);
+      // Only truly terminal states tear down the UI — 'disconnected' alone
+      // is handled above via ICE restart, not treated as fatal here.
+      if (['failed', 'closed'].includes(pc.connectionState)) {
+        clearTimeout(reconnectTimersRef.current[peerUid]);
         delete pcsRef.current[peerUid];
         setRemoteStreams(prev => { const n = { ...prev }; delete n[peerUid]; return n; });
       }
@@ -192,15 +238,18 @@ export function useGroupWebRTC(currentUserId) {
       const unsub = onSnapshot(doc(db, 'groupCalls', cid, 'signals', signalKey), async (snap) => {
         const data = snap.data();
         if (data?.answer && pc.signalingState === 'have-local-offer') {
+          vlog('Answer received', peerUid);
           try {
             await pc.setRemoteDescription(new RTCSessionDescription(data.answer));
             await drainPending(peerUid);
             subscribeTheirCandidates(cid, peerUid);
-          } catch {}
+          } catch (e) { console.error('[MEETING] setRemoteDescription(answer) FAILED', peerUid, e); }
         }
-      });
+      }, e => console.error('[MEETING] signal listener error (offerer side)', peerUid, e));
       allUnsubsRef.current.push(unsub);
-    } catch { /* offerToPeer failed — peer may have disconnected */ }
+    } catch (e) {
+      console.error('[MEETING] offerToPeer FAILED', peerUid, e);
+    }
   }, [makePc, drainPending, subscribeTheirCandidates]);
 
   const answerOffer = useCallback(async (cid, signal) => {
@@ -215,11 +264,14 @@ export function useGroupWebRTC(currentUserId) {
       await storeGroupAnswer(cid, peerUid, uid, { type: answer.type, sdp: answer.sdp });
       await drainPending(peerUid);
       subscribeTheirCandidates(cid, peerUid);
-    } catch { /* answerOffer failed — peer may have disconnected */ }
+    } catch (e) {
+      console.error('[MEETING] answerOffer FAILED', peerUid, e);
+    }
   }, [makePc, drainPending, subscribeTheirCandidates]);
 
   const listenForOffers = useCallback((cid) => {
     if (signalUnsubRef.current) { signalUnsubRef.current(); }
+    vlog('Listening for offers', cid);
     signalUnsubRef.current = subscribeToGroupSignals(cid, uidRef.current, (signal) => {
       answerOffer(cid, signal);
     });
@@ -228,7 +280,11 @@ export function useGroupWebRTC(currentUserId) {
   const watchCallDoc = useCallback((cid) => {
     if (callDocUnsubRef.current) { callDocUnsubRef.current(); }
     callDocUnsubRef.current = subscribeToGroupCallDoc(cid, (data) => {
-      if (!data || data.status === 'ended') { cleanup(); return; }
+      if (!data || data.status === 'ended') {
+        vlog('Call doc ended or missing — cleaning up', cid, data?.status);
+        cleanup();
+        return;
+      }
       const parts = data.participants || [];
       setGcParticipants(parts);
       // Immediately promote to 'active' when 2+ participants present
@@ -317,11 +373,35 @@ export function useGroupWebRTC(currentUserId) {
       await getLocalStream(type === 'video');
 
       const cid = await createGroupCallWithId(meetingCode, meetingName, uid, callerName || 'Host', type);
+      vlog('Meeting started by host', cid);
       setGcCallId(cid);
-      setGcParticipants([uid]);
+
+      // A participant can already be in the call doc's participants array
+      // if they were admitted in the lobby and auto-joined BEFORE the host
+      // clicked "Start Video Feed" (see joinGroupCallDoc's upsert fix).
+      // joinMeetingCall only offers to whoever it saw as "existing" at the
+      // moment IT joined — if that snapshot was taken before this doc even
+      // existed, it saw nobody, and never offered to the host. Since the
+      // host was never offering to pre-existing participants either, that
+      // combination meant NO SDP OFFER was ever sent in either direction —
+      // no peer connection was ever created, independent of participant
+      // count or ICE/network. Re-reading the doc here and offering to
+      // anyone already present closes that gap symmetrically.
+      let existing = [];
+      try {
+        const snap = await getDoc(doc(db, 'groupCalls', cid));
+        existing = (snap.exists() ? snap.data()?.participants : []) || [];
+      } catch (e) { console.error('[MEETING] Could not read existing participants on start', e); }
+      existing = existing.filter(p => p !== uid);
+      setGcParticipants([uid, ...existing]);
 
       listenForOffers(cid);
       watchCallDoc(cid);
+
+      for (const peerUid of existing) {
+        vlog('Host offering to already-present participant', peerUid);
+        await offerToPeer(cid, peerUid);
+      }
 
       if (!timerRef.current) {
         timerRef.current = setInterval(() => setCallDuration(d => d + 1), 1000);
@@ -331,7 +411,7 @@ export function useGroupWebRTC(currentUserId) {
       cleanup();
       throw e;
     }
-  }, [getLocalStream, listenForOffers, watchCallDoc, cleanup]);
+  }, [getLocalStream, offerToPeer, listenForOffers, watchCallDoc, cleanup]);
 
   // ── Join a MEETING call — participant, after host admission ──
   // The meeting code is already known to be valid (admission already
@@ -356,9 +436,11 @@ export function useGroupWebRTC(currentUserId) {
       } catch {}
 
       await joinGroupCallDoc(meetingCode, uid);
+      vlog('User joined meeting', { meetingCode, uid, existingParticipants: existing });
       setGcParticipants([...existing.filter(p => p !== uid), uid]);
 
       for (const peerUid of existing.filter(p => p !== uid)) {
+        vlog('Joiner offering to existing participant', peerUid);
         await offerToPeer(meetingCode, peerUid);
       }
 

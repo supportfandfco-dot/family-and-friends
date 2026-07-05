@@ -40,6 +40,24 @@ function Waveform({ active }) {
   );
 }
 
+// Voice AI was pulling chat context into EVERY question, even generic ones
+// ("what's the capital of France?"), causing it to summarize/reference the
+// chat when it had no business doing so. Chat context should only apply
+// when the utterance actually references the conversation — a cheap local
+// check, not another LLM call, so it doesn't add latency.
+const CHAT_RELEVANCE_HINTS = [
+  'this chat', 'this conversation', 'this group', 'what should i say',
+  'what should i reply', 'reply to', 'respond to', 'summarize', 'summarise',
+  'what did he say', 'what did she say', 'what did they say',
+  'his message', 'her message', 'their message', 'the last message',
+  'what he said', 'what she said', 'what they said', 'in the chat',
+  'to him', 'to her', 'to them', 'catch me up', 'what happened here',
+];
+function isChatRelevant(utterance) {
+  const t = utterance.toLowerCase();
+  return CHAT_RELEVANCE_HINTS.some(h => t.includes(h));
+}
+
 function waitForVoices() {
   return new Promise(resolve => {
     const voices = window.speechSynthesis?.getVoices() || [];
@@ -54,6 +72,19 @@ function waitForVoices() {
 // pinpoint exactly where a conversation turn breaks (mic -> recognition ->
 // transcript -> router -> Groq -> synthesis -> restart) from the console.
 function vlog(...args) { console.log('[VOICE]', ...args); }
+
+// Module-level (not per-component) caches — voices and feature support only
+// need to be resolved ONCE per page load, not every time VoiceAI mounts
+// (e.g. every time a chat is opened). Without this, startup latency paid
+// the voice-loading cost on every single open.
+let cachedVoicesPromise = null;
+function warmVoices() {
+  if (!cachedVoicesPromise) cachedVoicesPromise = waitForVoices();
+  return cachedVoicesPromise;
+}
+const SR_CTOR = typeof window !== 'undefined' ? (window.SpeechRecognition || window.webkitSpeechRecognition) : null;
+const RECOGNITION_SUPPORTED = !!SR_CTOR;
+const SYNTHESIS_SUPPORTED   = typeof window !== 'undefined' && 'speechSynthesis' in window;
 
 export default function VoiceAI() {
   const { user } = useAuth();
@@ -95,6 +126,16 @@ export default function VoiceAI() {
   useEffect(() => { mutedRef.current = muted; }, [muted]);
   useEffect(() => { contextRef.current = voiceContext; }, [voiceContext]);
 
+  // Warm up speechSynthesis voices as soon as VoiceAI mounts (i.e. as soon
+  // as a chat is opened), not the first time the overlay is actually
+  // opened. Chrome loads voices asynchronously on first access, which used
+  // to add real, user-visible delay to the FIRST spoken response of every
+  // session. Cached at module scope, so this only ever does real work once
+  // per page load — reopening the overlay in the same session is instant.
+  useEffect(() => {
+    if (SYNTHESIS_SUPPORTED) warmVoices();
+  }, []);
+
   // ── Speak AI response, then restart listening ───────────
   // Gemini-Live-style barge-in: the mic is started IN PARALLEL with TTS
   // (allowDuringSpeech), so if the user starts talking while the AI is
@@ -108,7 +149,7 @@ export default function VoiceAI() {
     vlog('Speaking response');
 
     window.speechSynthesis.cancel();
-    const voices = await waitForVoices();
+    const voices = await warmVoices();
     const preferred = voices.find(v =>
       v.name.includes('Google UK English Female') ||
       v.name.includes('Google US English') ||
@@ -191,7 +232,11 @@ export default function VoiceAI() {
     // groupName}} object the text overlay uses, turned into the identical
     // transcript string via the shared buildChatContextString() — so a
     // chat-aware question gets the same answer whether typed or spoken.
-    const chatContext = buildChatContextString(contextRef.current);
+    // Only pulled in when the utterance actually references the chat
+    // ("reply to him", "summarize this") — general questions ("what's the
+    // weather") skip it entirely instead of dragging in a chat summary
+    // that has nothing to do with the question.
+    const chatContext = isChatRelevant(question) ? buildChatContextString(contextRef.current) : null;
     // Plus rolling voice-session memory, so "what about tomorrow instead"
     // as a follow-up actually resolves against what was just said, rather
     // than being treated as an isolated, context-free question.
@@ -235,9 +280,8 @@ export default function VoiceAI() {
 
   // ── Build recogniser — only ever reads from refs, never stale ──
   const buildRecognition = useCallback(() => {
-    const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
-    if (!SR) return null;
-    const rec = new SR();
+    if (!RECOGNITION_SUPPORTED) return null;
+    const rec = new SR_CTOR();
     rec.continuous     = false;
     rec.interimResults = true;
     rec.lang           = 'en-US';
@@ -376,9 +420,18 @@ export default function VoiceAI() {
     setVoiceResponse('');
     setVoiceTranscript('');
 
+    if (!RECOGNITION_SUPPORTED) {
+      // Immediate, clear fallback instead of silently trying to start and
+      // failing — this is a desktop Chrome/Edge feature; Firefox and most
+      // non-Chromium browsers don't implement the Web Speech API at all.
+      setError('Voice AI needs Chrome, Edge, or another Chromium-based browser. Your current browser doesn\'t support speech recognition.');
+      setPhase('idle');
+      return;
+    }
+
     setTimeout(() => {
       if (isActiveRef.current) startRecognitionRef.current();
-    }, 300);
+    }, 120);
 
     return () => {
       isActiveRef.current = false;

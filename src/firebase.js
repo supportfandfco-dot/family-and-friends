@@ -826,8 +826,12 @@ export async function createGroupCallWithId(callId, groupName, initiatorId, init
       isMeeting: true,
       createdAt: serverTimestamp(),
     }, { merge: true });
+    console.log('[MEETING] Meeting created', { callId, initiatorId, type });
     return callId;
-  } catch (e) { throw e; }
+  } catch (e) {
+    console.error('[MEETING] Meeting creation FAILED', callId, e);
+    throw e;
+  }
 }
 
 export async function joinGroupCallDoc(callId, uid) {
@@ -850,11 +854,15 @@ export async function joinGroupCallDoc(callId, uid) {
       invitedMembers: arrayRemove(uid),
       status: 'active',
     }, { merge: true });
-  } catch {}
+    console.log('[MEETING] User joined', { callId, uid });
+  } catch (e) {
+    console.error('[MEETING] User join FAILED', { callId, uid }, e);
+  }
 }
 
 export async function endGroupCallDoc(callId) {
-  try { await updateDoc(doc(db, 'groupCalls', callId), { status: 'ended' }); } catch {}
+  try { await updateDoc(doc(db, 'groupCalls', callId), { status: 'ended' }); }
+  catch (e) { console.error('[MEETING] endGroupCallDoc FAILED', callId, e); }
 }
 
 export function subscribeToIncomingGroupCalls(uid, callback) {
@@ -882,9 +890,15 @@ export async function saveCallLog(uid, log) {
 
 export function subscribeToGroupCallDoc(callId, callback) {
   return onSnapshot(doc(db, 'groupCalls', callId), snap => {
-    if (snap.exists()) callback({ id: snap.id, ...snap.data() });
-    else callback(null);
-  });
+    if (snap.exists()) {
+      const data = { id: snap.id, ...snap.data() };
+      console.log('[MEETING] Call doc updated', { callId, status: data.status, participants: data.participants });
+      callback(data);
+    } else {
+      console.warn('[MEETING] Call doc does not exist', callId);
+      callback(null);
+    }
+  }, e => console.error('[MEETING] subscribeToGroupCallDoc listener error', callId, e));
 }
 
 // Offerer stores offer for answerer: signals/{offerer}_{answerer}
@@ -896,19 +910,32 @@ export async function storeGroupOffer(callId, offererUid, answererUid, offerSdp)
       offer: offerSdp, answer: null,
       createdAt: serverTimestamp(),
     });
-  } catch {}
+    console.log('[MEETING] Offer sent', { callId, from: offererUid, to: answererUid });
+  } catch (e) {
+    console.error('[MEETING] Offer send FAILED', { callId, offererUid, answererUid }, e);
+  }
 }
 
 // Answerer updates that same doc with the answer
 export async function storeGroupAnswer(callId, offererUid, answererUid, answerSdp) {
   const key = `${offererUid}_${answererUid}`;
-  try { await updateDoc(doc(db, 'groupCalls', callId, 'signals', key), { answer: answerSdp }); } catch {}
+  try {
+    await updateDoc(doc(db, 'groupCalls', callId, 'signals', key), { answer: answerSdp });
+    console.log('[MEETING] Answer sent', { callId, from: answererUid, to: offererUid });
+  } catch (e) {
+    console.error('[MEETING] Answer send FAILED', { callId, offererUid, answererUid }, e);
+  }
 }
 
 // Store ICE candidate sent from fromUid to toUid
 export async function addGroupIceCandidate(callId, fromUid, toUid, candidate) {
   const key = `${fromUid}_${toUid}`;
-  try { await addDoc(collection(db, 'groupCalls', callId, 'candidates', key, 'list'), candidate); } catch {}
+  try {
+    await addDoc(collection(db, 'groupCalls', callId, 'candidates', key, 'list'), candidate);
+    console.log('[MEETING] ICE candidate sent', { callId, from: fromUid, to: toUid, type: candidate?.candidate ? candidate.candidate.split(' ')[7] : 'end-of-candidates' });
+  } catch (e) {
+    console.error('[MEETING] ICE candidate send FAILED — check firestore.rules candidates/list nesting is deployed', { callId, fromUid, toUid }, e);
+  }
 }
 
 // Listen for new OFFER signals targeted at myUid (only 'added' events)
@@ -917,10 +944,13 @@ export function subscribeToGroupSignals(callId, myUid, callback) {
     snap.docChanges().forEach(change => {
       if (change.type === 'added') {
         const data = change.doc.data();
-        if (data?.to === myUid && data?.offer) callback({ id: change.doc.id, ...data });
+        if (data?.to === myUid && data?.offer) {
+          console.log('[MEETING] Offer received', { callId, from: data.from, to: myUid });
+          callback({ id: change.doc.id, ...data });
+        }
       }
     });
-  });
+  }, e => console.error('[MEETING] subscribeToGroupSignals listener error', callId, e));
 }
 
 // Subscribe to ICE candidates sent from fromUid to toUid
@@ -928,9 +958,12 @@ export function subscribeToGroupCandidates(callId, fromUid, toUid, callback) {
   const key = `${fromUid}_${toUid}`;
   return onSnapshot(collection(db, 'groupCalls', callId, 'candidates', key, 'list'), snap => {
     snap.docChanges().forEach(change => {
-      if (change.type === 'added') callback(change.doc.data());
+      if (change.type === 'added') {
+        console.log('[MEETING] ICE candidate received', { callId, from: fromUid, to: toUid });
+        callback(change.doc.data());
+      }
     });
-  });
+  }, e => console.error('[MEETING] subscribeToGroupCandidates listener error — check firestore.rules candidates/list nesting is deployed', { callId, fromUid, toUid }, e));
 }
 
 // ── FCM Messaging ──────────────────────────────────────────────
