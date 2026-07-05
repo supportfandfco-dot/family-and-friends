@@ -150,6 +150,34 @@ function AppInner() {
   const [incomingGroupCall, setIncomingGroupCall] = useState(null);
   const [gcMemberProfiles,  setGcMemberProfiles]  = useState({});
 
+  // General-purpose profile loader for the call screen — fetches any
+  // participant UID not already in gcMemberProfiles directly via
+  // getUserById(), regardless of call type. The two existing population
+  // paths (incoming-group-call ring lookup via a real groups/{groupId} doc,
+  // and GroupChatWindow's member list) never fire for meetings, since
+  // meetings use the meeting CODE as a fake groupId (there's no real
+  // groups/{meetingCode} document) and don't route through
+  // GroupChatWindow at all — so gcMemberProfiles stayed permanently empty
+  // for every meeting, and ParticipantTile's uid.slice(0,8) fallback was
+  // showing raw UID fragments as names for every participant. This covers
+  // every call type uniformly instead of adding a third narrow, duplicate
+  // path.
+  useEffect(() => {
+    if (gcStatus === 'idle' || !gcParticipants.length) return;
+    const missing = gcParticipants.filter(uid => uid && !gcMemberProfiles[uid]);
+    if (!missing.length) return;
+    let cancelled = false;
+    Promise.all(missing.map(uid => getUserById(uid))).then(results => {
+      if (cancelled) return;
+      const additions = {};
+      results.filter(Boolean).forEach(p => { additions[p.id] = p; });
+      if (Object.keys(additions).length) {
+        setGcMemberProfiles(prev => ({ ...prev, ...additions }));
+      }
+    }).catch(() => {});
+    return () => { cancelled = true; };
+  }, [gcStatus, gcParticipants, gcMemberProfiles]);
+
   // ── Global AI Auto-Pilot ─────────────────────────────
   useAIAutoPilot(user?.uid, profile);
   useIntelligenceEngine(user?.uid);
@@ -527,11 +555,6 @@ function AppInner() {
           meetingCode={activeMeeting.code}
           isHost={activeMeeting.isHost}
           onStartCall={async () => {
-            // TEMPORARY DIAGNOSTIC — remove after confirming this fires.
-            // alert() was unreliable (browsers silently suppress repeated
-            // alert() calls with zero indication) — document.title can't be
-            // suppressed and is impossible to miss.
-            document.title = 'STARTCALL-FIRED-' + (activeMeeting.isHost ? 'HOST' : 'PARTICIPANT');
             const meetingName = `Meeting ${activeMeeting.code}`;
             // Root cause of the permanent "Calling..." hang: this used to call
             // checkMediaPermission(true) here FIRST — its own separate

@@ -18,7 +18,7 @@ import {
   increment, writeBatch
 } from 'firebase/firestore';
 import { getStorage, ref, uploadBytes, getDownloadURL } from 'firebase/storage';
-import { getDatabase, ref as dbRef, set, onValue, onDisconnect, serverTimestamp as dbTimestamp } from 'firebase/database';
+import { getDatabase } from 'firebase/database';
 
 // ── FIREBASE CONFIG ─────────────────────────────────────────────
 const firebaseConfig = {
@@ -125,43 +125,6 @@ export function subscribeToPresence(uid, callback) {
   } catch {}
 
   return () => { try { fsUnsub?.(); } catch {} };
-}
-
-function _subscribeToPresenceLegacy(uid, callback) {
-  let rtdbValue = null;
-  let firestoreValue = null;
-  let rtdbUnsub = null;
-  let fsUnsub = null;
-
-  const resolve = () => {
-    if (rtdbValue !== null) {
-      callback(rtdbValue);
-    } else if (firestoreValue !== null) {
-      callback(firestoreValue);
-    }
-  };
-
-  try {
-    rtdbUnsub = onValue(dbRef(rtdb, `/status/${uid}`), snap => {
-      rtdbValue = snap.val();
-      resolve();
-    });
-  } catch {}
-
-  try {
-    fsUnsub = onSnapshot(doc(db, 'users', uid), snap => {
-      const d = snap.data();
-      if (d) {
-        firestoreValue = { state: d.isOnline ? 'online' : 'offline', last_changed: d.lastSeen };
-        resolve();
-      }
-    });
-  } catch {}
-
-  return () => {
-    try { rtdbUnsub?.(); } catch {}
-    try { fsUnsub?.(); } catch {}
-  };
 }
 
 // ── User helpers ───────────────────────────────────────────────
@@ -653,17 +616,20 @@ export async function clearChat(chatId, uid, isGroup = false) {
 }
 
 // ── Presence helpers ───────────────────────────────────────────
+// Firestore is the single source of truth for presence (see setupPresence/
+// subscribeToPresence above) — these used to ALSO write to Realtime
+// Database's /status/{uid}, which has no deployed security rules for this
+// project, producing a permission_denied warning logged directly by
+// Firebase's SDK on every call (visible even though the write itself is
+// wrapped in try/catch, since the warning is logged internally by the RTDB
+// SDK regardless of how the caller handles the resulting rejection).
 export async function setOnline(uid) {
   try {
-    const r = dbRef(rtdb, `/status/${uid}`);
-    await set(r, { state: 'online', last_changed: Date.now() });
     await updateDoc(doc(db, 'users', uid), { isOnline: true, lastSeen: serverTimestamp() });
   } catch {}
 }
 export async function updateLastSeen(uid) {
   try {
-    const r = dbRef(rtdb, `/status/${uid}`);
-    await set(r, { state: 'offline', last_changed: Date.now() });
     await updateDoc(doc(db, 'users', uid), { isOnline: false, lastSeen: serverTimestamp() });
   } catch {}
 }
