@@ -339,7 +339,19 @@ export default function CallsTab({ contacts = [], onVoiceCall, onVideoCall }) {
           isHost={meetingRoom.isHost}
           onStartCall={() => {
             setMeetingRoom(null);
-            onVideoCall?.({ id: meetingRoom.code, name: `Meeting ${meetingRoom.code}`, isMeeting: true, isHost: meetingRoom.isHost });
+            // CRITICAL: this must be named meetingCode, not id — App.jsx's
+            // handleVideoCall specifically checks `partner?.meetingCode` to
+            // decide whether to route into the meeting system
+            // (setActiveMeeting -> startMeetingCall/joinMeetingCall) or fall
+            // through to the regular 1-on-1 WebRTC calling system. This was
+            // passing `id` instead, so that check was always false — every
+            // meeting call from this tab silently misrouted into
+            // useWebRTC.js's startCall(), which tried to place a normal
+            // call to the meeting CODE as if it were a real user ID. None
+            // of the meeting-specific code (startMeetingCall, the
+            // [MEETING] logging, any of it) was ever actually reached from
+            // this entry point.
+            onVideoCall?.({ meetingCode: meetingRoom.code, name: `Meeting ${meetingRoom.code}`, isMeeting: true, isHost: meetingRoom.isHost });
           }}
           onClose={() => setMeetingRoom(null)}
         />
