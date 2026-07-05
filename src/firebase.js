@@ -11,7 +11,7 @@ import { getAuth, RecaptchaVerifier, signInWithPhoneNumber,
   reauthenticateWithCredential
 } from 'firebase/auth';
 import {
-  getFirestore,
+  initializeFirestore,
   collection, doc, setDoc, getDoc, getDocs,
   addDoc, updateDoc, deleteDoc, onSnapshot, query, where,
   orderBy, limit, startAfter, serverTimestamp, arrayUnion, arrayRemove,
@@ -35,9 +35,26 @@ const firebaseConfig = {
 const app  = initializeApp(firebaseConfig);
 const auth = getAuth(app);
 
-// Firestore — use default initialization for reliable real-time updates
-// persistentMultipleTabManager caused secondary tabs to stop receiving updates
-const db = getFirestore(app);
+// Firestore — default initialization plumbing (persistentMultipleTabManager
+// caused secondary tabs to stop receiving updates, so no custom
+// persistence/cache config here — that's an intentionally separate
+// decision from the line below).
+//
+// experimentalAutoDetectLongPolling: some networks (VPNs, corporate
+// proxies/firewalls, some ISPs) interfere with or block the QUIC/HTTP3
+// transport Firestore's WebChannel connection prefers by default, which
+// surfaces as net::ERR_QUIC_PROTOCOL_ERROR and "WebChannelConnection RPC
+// 'Listen' stream ... transport errored" in the console — and since every
+// real-time listener (chats, presence, and critically the meeting call's
+// signaling/ICE-candidate listeners) rides on this same connection, a
+// failure here silently breaks everything downstream even though the
+// application code and Firestore rules are completely correct. This
+// setting detects that failure and falls back to plain HTTP long-polling
+// automatically — only when needed, so it doesn't cost anything on
+// networks where the default transport works fine.
+const db = initializeFirestore(app, {
+  experimentalAutoDetectLongPolling: true,
+});
 
 const storage = getStorage(app);
 const rtdb    = getDatabase(app);
