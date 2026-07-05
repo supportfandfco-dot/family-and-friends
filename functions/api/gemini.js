@@ -10,7 +10,13 @@ export async function onRequestPost({ request, env }) {
   }
 
   try {
-    const { prompt, system, model = 'gemini-2.0-flash', max_tokens = 512, imageBase64, imageMimeType } = await request.json();
+    // gemini-2.0-flash was shut down by Google on June 1, 2026 — that's why
+    // media intelligence stopped working, not an integration bug. Using
+    // gemini-3.5-flash (released May 2026, no shutdown announced yet) rather
+    // than the direct-replacement gemini-2.5-flash, since that one already
+    // has an announced Oct 16, 2026 shutdown — this avoids a second
+    // migration a few months from now.
+    const { prompt, system, model = 'gemini-3.5-flash', max_tokens = 512, imageBase64, imageMimeType } = await request.json();
 
     const parts = [];
     if (imageBase64) {

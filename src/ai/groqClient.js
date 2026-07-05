@@ -173,7 +173,7 @@ export async function askVision(prompt, imageBase64, mimeType, signal) {
       body: JSON.stringify({
         prompt,
         system: SYSTEM_BASE,
-        model: 'gemini-2.0-flash',
+        model: 'gemini-3.5-flash',
         max_tokens: 300,
         imageBase64,
         imageMimeType: mimeType,

@@ -116,6 +116,17 @@ export default function VoiceAI() {
   // of treating every utterance as a fresh, isolated question. Cleared
   // whenever the overlay closes (see the voiceAIOpen effect below).
   const voiceHistoryRef = useRef([]);
+  // Cached result of navigator.permissions.query({name:'microphone'}),
+  // checked on mount. This does NOT touch the microphone or start
+  // recognition early — starting recognition while the overlay is closed
+  // would mean transcribing speech and speaking AI responses without the
+  // user ever having opened Voice AI, which the existing isActiveRef guard
+  // correctly prevents. What this DOES let us do: when the overlay opens,
+  // if we already know permission is 'granted', skip the artificial
+  // startup delay entirely since there's no permission-prompt uncertainty
+  // to wait out — shaving real time off the "click mic -> hear LISTENING"
+  // gap without ever listening before the user asked for it.
+  const micPermissionRef = useRef('unknown');
 
   // Refs that always point to the LATEST function — read inside
   // the recognizer's event handlers, which are otherwise frozen
@@ -134,6 +145,20 @@ export default function VoiceAI() {
   // per page load — reopening the overlay in the same session is instant.
   useEffect(() => {
     if (SYNTHESIS_SUPPORTED) warmVoices();
+  }, []);
+
+  // Check mic permission status (read-only, no mic access) so we can skip
+  // the artificial startup delay on open when we already know for certain
+  // there's no permission prompt to wait out.
+  useEffect(() => {
+    if (!navigator.permissions?.query) return;
+    let result;
+    navigator.permissions.query({ name: 'microphone' }).then(r => {
+      result = r;
+      micPermissionRef.current = r.state;
+      r.onchange = () => { micPermissionRef.current = r.state; };
+    }).catch(() => {});
+    return () => { if (result) result.onchange = null; };
   }, []);
 
   // ── Speak AI response, then restart listening ───────────
@@ -431,7 +456,7 @@ export default function VoiceAI() {
 
     setTimeout(() => {
       if (isActiveRef.current) startRecognitionRef.current();
-    }, 120);
+    }, micPermissionRef.current === 'granted' ? 0 : 120);
 
     return () => {
       isActiveRef.current = false;
