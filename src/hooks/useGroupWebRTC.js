@@ -117,7 +117,19 @@ export function useGroupWebRTC(currentUserId) {
 
     for (const c of tries) {
       try {
-        const stream = await navigator.mediaDevices.getUserMedia(c);
+        vlog('Requesting camera/mic', c);
+        // Hard timeout — getUserMedia() has no built-in timeout and can hang
+        // indefinitely on some browser/OS/driver combinations (e.g. two
+        // getUserMedia() calls fired in quick succession on the same
+        // hardware). A hung promise never resolves AND never rejects, so
+        // without this, everything downstream — including every one of the
+        // [MEETING] logs — silently never fires, while the UI stays on
+        // "Calling..." forever with zero error to explain why.
+        const stream = await Promise.race([
+          navigator.mediaDevices.getUserMedia(c),
+          new Promise((_, reject) => setTimeout(() => reject(new Error('getUserMedia timed out after 8s')), 8000)),
+        ]);
+        vlog('Camera/mic acquired', { video: !!c.video });
         localStreamRef.current = stream;
         setLocalStream(stream);
         if (localVideoRef.current) {
@@ -127,7 +139,9 @@ export function useGroupWebRTC(currentUserId) {
           localVideoRef.current.play().catch(() => {});
         }
         return stream;
-      } catch {}
+      } catch (e) {
+        console.error('[MEETING] getUserMedia attempt FAILED', c, e.message);
+      }
     }
     throw new Error('Could not access microphone/camera');
   }, []);

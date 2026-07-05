@@ -280,25 +280,18 @@ function AppInner() {
     setShowSettings(false);
   }, []);
 
-  // ── Check mic/camera permission before calling ────────
-  const checkMediaPermission = async (needVideo) => {
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({
-        audio: true,
-        video: needVideo,
-      });
-      // Stop the test stream immediately — we just needed the permission grant
-      stream.getTracks().forEach(t => t.stop());
-      return true;
-    } catch (err) {
-      if (err.name === 'NotAllowedError' || err.name === 'PermissionDeniedError') {
-        toast.error('Please allow microphone access in your browser settings, then try again.', { duration: 5000 });
-      } else {
-        toast.error('Could not access microphone: ' + err.message);
-      }
-      return false;
-    }
-  };
+  // checkMediaPermission was removed — it did its own getUserMedia()
+  // grab-then-stop as a pre-flight check before startCall/startMeetingCall/
+  // joinMeetingCall each made their OWN separate getUserMedia() call for the
+  // real stream. That double-acquisition, back-to-back on the same
+  // hardware, was the root cause of meetings hanging on "Calling..."
+  // forever with zero console output: getUserMedia() has no built-in
+  // timeout, so when the second call raced the first and hung, nothing
+  // downstream ever ran — no success, no error, nothing. Permission errors
+  // are now surfaced directly from the real acquisition (getLocalStream in
+  // useGroupWebRTC.js / useWebRTC.js), which already has proper try/catch
+  // and user-facing error messages, without a redundant pre-flight call
+  // that only recreated the exact race it was meant to guard against.
 
   // ── Meeting room state ────────────────────────────────
   const [activeMeeting, setActiveMeeting] = useState(null); // { code, isHost }
@@ -307,8 +300,11 @@ function AppInner() {
   const handleVoiceCall = async (partner) => {
     if (!partner?.id && !partner?.uid) { toast.error('Contact not loaded yet, please wait.'); return; }
     const partnerId = partner.id || partner.uid;
-    const allowed = await checkMediaPermission(false);
-    if (!allowed) return;
+    // No separate checkMediaPermission() pre-flight — same root cause as the
+    // meeting call fix: it did its own getUserMedia() grab-then-stop, then
+    // startCall()'s own getLocalStream-equivalent immediately made a SECOND
+    // getUserMedia() call, racing on the same hardware. startCall() already
+    // does its own real acquisition with proper error handling.
     setActiveRemoteUser(partner);
     try {
       await startCall(partnerId, 'voice');
@@ -332,8 +328,7 @@ function AppInner() {
     }
     if (!partner?.id && !partner?.uid) { toast.error('Contact not loaded yet, please wait.'); return; }
     const partnerId = partner.id || partner.uid;
-    const allowed = await checkMediaPermission(true);
-    if (!allowed) return;
+    // Same fix as handleVoiceCall above — no redundant pre-flight getUserMedia.
     setActiveRemoteUser(partner);
     try {
       await startCall(partnerId, 'video');
@@ -533,8 +528,23 @@ function AppInner() {
           isHost={activeMeeting.isHost}
           onStartCall={async () => {
             const meetingName = `Meeting ${activeMeeting.code}`;
-            const allowed = await checkMediaPermission(true);
-            if (!allowed) return;
+            // Root cause of the permanent "Calling..." hang: this used to call
+            // checkMediaPermission(true) here FIRST — its own separate
+            // getUserMedia() grab-then-immediately-stop — and then
+            // getLocalStream() (inside startMeetingCall/joinMeetingCall,
+            // called moments later) made a SECOND, independent getUserMedia()
+            // call for the real stream. Two rapid-fire getUserMedia()
+            // acquisitions on the same camera/mic hardware is a known way to
+            // get the second call to hang indefinitely on some browser/OS/
+            // driver combinations — not throw, just never resolve. Since a
+            // hung promise produces no success AND no error, every log
+            // downstream (including every [MEETING] log) silently never
+            // fired, while "Calling..." (set synchronously, before any of
+            // this) stayed on screen forever. getLocalStream() already does
+            // its own real getUserMedia() call with fallback configs and
+            // proper error handling — it doesn't need a separate pre-flight
+            // check that only recreates the exact race it was meant to guard
+            // against.
             // Close MeetingRoom first — GroupCallScreen renders while WebRTC negotiates
             const code  = activeMeeting.code;
             const isHst = activeMeeting.isHost;
@@ -546,6 +556,7 @@ function AppInner() {
                 await joinMeetingCall(code, meetingName, 'video');
               }
             } catch (err) {
+              console.error('[MEETING] onStartCall FAILED', err);
               toast.error(err.message || 'Could not join meeting video feed.');
             }
           }}

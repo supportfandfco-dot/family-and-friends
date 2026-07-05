@@ -108,7 +108,16 @@ export function useWebRTC(currentUserId) {
     let lastErr = null;
     for (const constraints of attempts) {
       try {
-        const stream = await navigator.mediaDevices.getUserMedia(constraints);
+        // Hard timeout — same reasoning as useGroupWebRTC.js's getLocalStream:
+        // getUserMedia() has no built-in timeout and can hang indefinitely
+        // (never resolving, never rejecting) on some browser/OS/driver
+        // combinations, especially right after a prior getUserMedia() call's
+        // tracks were just stopped. Without this, a hang here produces no
+        // error and no feedback — the call UI just sits there forever.
+        const stream = await Promise.race([
+          navigator.mediaDevices.getUserMedia(constraints),
+          new Promise((_, reject) => setTimeout(() => reject(new Error('getUserMedia timed out after 8s')), 8000)),
+        ]);
         localStreamRef.current = stream;
         // Ensure audio enabled immediately
         stream.getAudioTracks().forEach(t => { t.enabled = true; });
