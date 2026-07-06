@@ -162,11 +162,16 @@ export default function VoiceAI() {
   }, []);
 
   // ── Speak AI response, then restart listening ───────────
-  // Gemini-Live-style barge-in: the mic is started IN PARALLEL with TTS
-  // (allowDuringSpeech), so if the user starts talking while the AI is
-  // still speaking, rec.onspeechstart fires, cancels the utterance
-  // immediately, and the SAME recognition instance keeps capturing the
-  // user's new utterance — no duplicate pipeline, no extra AI router.
+  // NOTE: true simultaneous barge-in (listening WHILE TTS plays) was tried
+  // and reverted. Without headphones, the microphone picks up the AI's own
+  // voice coming out of the speakers and misreads it as the user
+  // interrupting — causing TTS to get cut off mid-sentence, and repeated
+  // false "interruptions" that flickered the UI between listening/idle.
+  // The Web Speech API doesn't provide the acoustic echo cancellation
+  // needed to tell "the AI's own voice bleeding into the mic" apart from
+  // "the user actually talking" — that requires dedicated AEC
+  // infrastructure this app doesn't have. Listening now resumes
+  // immediately once TTS actually finishes, which is reliable.
   const speak = useCallback(async (text) => {
     if (!text?.trim() || !('speechSynthesis' in window)) return;
     isSpeakingRef.current = true;
@@ -182,11 +187,6 @@ export default function VoiceAI() {
       (v.lang.startsWith('en') && !v.name.includes('Male'))
     ) || null;
 
-    // Start listening for barge-in right away — doesn't block TTS playback.
-    if (isActiveRef.current && !mutedRef.current) {
-      startRecognitionRef.current({ allowDuringSpeech: true });
-    }
-
     return new Promise(resolve => {
       const utt   = new SpeechSynthesisUtterance(text.slice(0, 500));
       utt.rate    = 1.05;
@@ -196,19 +196,12 @@ export default function VoiceAI() {
 
       const finishAndRestart = () => {
         isSpeakingRef.current = false;
+        setPhase('idle');
         resolve();
-        if (isRecognitionActiveRef.current) {
-          // Barge-in listener is already live — just flip the visual
-          // state, no second rec.start() (would throw InvalidStateError
-          // and risk two overlapping recognizers).
-          setPhase('listening');
-        } else {
-          setPhase('idle');
-          vlog('Restarting recognizer');
-          setTimeout(() => {
-            if (isActiveRef.current && !mutedRef.current) startRecognitionRef.current();
-          }, 400);
-        }
+        vlog('Restarting recognizer');
+        setTimeout(() => {
+          if (isActiveRef.current && !mutedRef.current) startRecognitionRef.current();
+        }, 400);
       };
 
       utt.onend   = finishAndRestart;
@@ -313,25 +306,11 @@ export default function VoiceAI() {
 
     rec.onstart = () => {
       isRecognitionActiveRef.current = true;
-      vlog('Recognition started', isSpeakingRef.current ? '(barge-in listener, AI still speaking)' : '');
-      // Don't stomp on the "SPEAKING…" UI if this is a barge-in listener
-      // starting in parallel with TTS — only show LISTENING once the AI
-      // actually finishes, or once the user actually barges in (below).
-      if (!isSpeakingRef.current) setPhase('listening');
+      vlog('Recognition started');
+      setPhase('listening');
       setVoiceListening(true);
       transcriptRef.current = '';
       setVoiceTranscript('');
-    };
-
-    // Fires as soon as the recognizer detects actual speech energy — used
-    // as the barge-in trigger since it's faster than waiting for onresult.
-    rec.onspeechstart = () => {
-      if (isSpeakingRef.current) {
-        vlog('Barge-in detected — stopping TTS');
-        window.speechSynthesis.cancel();
-        isSpeakingRef.current = false;
-        setPhase('listening');
-      }
     };
 
     rec.onresult = (e) => {
@@ -349,19 +328,8 @@ export default function VoiceAI() {
       if (!isActiveRef.current) return;
 
       if (finalText) {
-        // If this text was captured mid-TTS (barge-in), isSpeakingRef is
-        // already false (onspeechstart cancelled it) — handleAsk proceeds
-        // through the exact same pipeline either way.
         vlog('Transcript received:', finalText);
         handleAskRef.current(finalText);
-      } else if (isSpeakingRef.current) {
-        // The barge-in listener timed out (continuous=false has a native
-        // silence timeout) while the AI is STILL talking — restart it so
-        // barge-in stays available for the rest of a long response,
-        // instead of leaving a dead window with no mic until TTS ends.
-        setTimeout(() => {
-          if (isActiveRef.current) startRecognitionRef.current({ allowDuringSpeech: true });
-        }, 200);
       } else {
         // No transcript captured — this fires routinely because
         // continuous=false makes the browser stop listening the instant
@@ -388,23 +356,19 @@ export default function VoiceAI() {
       }
       // Recoverable error (e.g. "no-speech", "network") — silently retry
       // without flashing the idle/"tap to speak" state; same reasoning as
-      // the empty-transcript branch above. Preserve barge-in capability if
-      // the AI is still mid-response.
-      const stillSpeaking = isSpeakingRef.current;
+      // the empty-transcript branch above.
       setTimeout(() => {
-        if (!isActiveRef.current) return;
-        startRecognitionRef.current(stillSpeaking ? { allowDuringSpeech: true } : undefined);
-      }, stillSpeaking ? 200 : 500);
+        if (isActiveRef.current && !isSpeakingRef.current) startRecognitionRef.current();
+      }, 500);
     };
 
     return rec;
   }, []);
 
   // ── Start recognition ───────────────────────────────────
-  const startRecognition = useCallback((opts) => {
-    const allowDuringSpeech = !!opts?.allowDuringSpeech;
+  const startRecognition = useCallback(() => {
     if (mutedRef.current || isProcessingRef.current || !isActiveRef.current) return;
-    if (isSpeakingRef.current && !allowDuringSpeech) return;
+    if (isSpeakingRef.current) return;
     // Never start a second recognizer while one is already live — browsers
     // throw InvalidStateError and it risks two overlapping mic streams.
     if (isRecognitionActiveRef.current) return;
