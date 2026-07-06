@@ -1,0 +1,59 @@
+# ── Family & Friends — Environment Variables ──────────────────
+# Rename this file to .env and fill in your values.
+# NEVER commit .env to git.
+#
+# IMPORTANT: this local file only affects your LOCAL dev server. Your live
+# site on Cloudflare Pages builds from Cloudflare's OWN dashboard env vars
+# (Settings → Environment Variables) — adding/fixing values here does
+# nothing for production until the same values are also set there, and a
+# new deployment is triggered (Vite bakes VITE_-prefixed vars in at BUILD
+# time, not at request time).
+
+# ── Firebase Web Push VAPID key (client-side, safe with VITE_ prefix) ──
+# Firebase Console → Project Settings → Cloud Messaging → Web Push certificates
+VITE_FIREBASE_VAPID_KEY=
+
+# ── Media Uploads (required — replaces Firebase Storage, no card needed) ──
+# ImgBB (images): https://api.imgbb.com/
+VITE_IMGBB_API_KEY=
+# Cloudinary (audio/video — voice notes, videos): https://cloudinary.com/users/register/free
+# Create an UNSIGNED upload preset under Settings → Upload → Upload presets
+# — the preset NAME goes here (short, e.g. "ml_default"), not an API secret.
+VITE_CLOUDINARY_CLOUD_NAME=
+VITE_CLOUDINARY_UPLOAD_PRESET=
+
+# ── AI Providers (required for tasks/autopilot/chat AI/Voice AI) ────────
+# Groq (free): https://console.groq.com/keys
+# Read SERVER-SIDE ONLY by functions/api/groq.js — no VITE_ prefix, this
+# must be set in the Cloudflare Pages dashboard, not just here.
+GROQ_API_KEY=
+# Gemini (media intelligence / vision — image analysis, captions):
+# https://aistudio.google.com/app/apikey
+# Also read server-side only by functions/api/gemini.js.
+GEMINI_API_KEY=
+
+# ── FCM Push (optional) ──────────────────────────────────────────
+# CRITICAL SECURITY NOTE: these are a Firebase Admin SDK service account.
+# They must NEVER have a VITE_ prefix — Vite bundles every VITE_-prefixed
+# var directly into the public JS served to every visitor. A service
+# account private key running in the browser would let anyone who opens
+# your site's JS fully impersonate your Firebase Admin SDK: bypass every
+# Firestore/Storage rule, read/write any data, send arbitrary push
+# notifications. Set these ONLY in the Cloudflare Pages dashboard
+# (server-side), never in a client-facing .env — and if the key that was
+# previously here (VITE_SA_PRIVATE_KEY) was ever a real, valid key, rotate
+# it in Firebase Console → Project Settings → Service accounts immediately.
+# Firebase Console → Project Settings → Service accounts → Generate new private key
+SA_CLIENT_EMAIL=
+SA_PRIVATE_KEY=
+FIREBASE_PROJECT_ID=family-friends-ee992
+
+# ── LiveKit AI Voice (optional) ─────────────────────────────────
+# Get these from https://cloud.livekit.io (Free tier available)
+# Leave blank to run in browser STT/TTS fallback mode.
+VITE_LIVEKIT_URL=wss://family-and-friends-blk2m3xc.livekit.cloud
+VITE_LIVEKIT_TOKEN_ENDPOINT=/api/livekit-token
+
+# Set these in Cloudflare Pages dashboard (server-side only, never expose to client):
+# LIVEKIT_API_KEY=
+# LIVEKIT_API_SECRET=

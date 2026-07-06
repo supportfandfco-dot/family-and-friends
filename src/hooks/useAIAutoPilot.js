@@ -282,10 +282,18 @@ async function handleMessage({ uid, profile, chatId, chat, lastMsg, mode }) {
 
   // Step 2: Check if worth processing at all
   const localScore = scoreMessageLocally(content);
-  const hasRules   = rules.trim().length > 0;
 
-  // Skip if no rules AND message is low-signal AND not urgent
-  if (!hasRules && localScore < 0.2 && category !== 'urgent' && category !== 'request') return;
+  // Only skip clearly trivial content (a bare greeting/reaction with no
+  // other signal) — everything else always goes through the full AI
+  // pipeline below, even with zero rules configured. The previous gate
+  // required EITHER explicit rules OR a moderate local confidence score
+  // before ever calling the AI at all — so with no rules set (the "should
+  // work even with no instructions" case), an ordinary question or normal
+  // conversational message that didn't happen to match the narrow local
+  // regex patterns got silently skipped entirely, never reaching the AI
+  // that's supposed to "use its own judgment" per the prompt's fallback
+  // rules text below.
+  if ((category === 'greeting' || category === 'reaction') && localScore < 0.2) return;
 
   // Step 3: Fetch conversation history
   const history = await getHistory(chatId, 15);
