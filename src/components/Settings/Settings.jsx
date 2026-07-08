@@ -10,7 +10,7 @@ import {
   User, Bell, Lock, Palette, Moon, Sun, Monitor, HelpCircle,
   LogOut, ChevronRight, Edit3, Camera, Check, ArrowLeft,
   MessageSquare, Shield, Globe, Smartphone, Star, Heart,
-  Code, Info, Volume2, Eye, Download, Trash2, Share2, X, UserMinus, Bot,
+  Code, Info, Volume2, Eye, EyeOff, Download, Trash2, Share2, X, UserMinus, Bot,
   MessageCircle, Wifi,
 } from 'lucide-react';
 import toast from 'react-hot-toast';
@@ -221,6 +221,7 @@ export default function Settings({ onBack, initialSection, onOpenChat }) {
         { icon: MessageCircle, label: 'Chat Settings', sub: 'Bubble shape, text size, sound', section: 'chat_settings', color: '#22c55e' },
         { icon: Smartphone, label: 'App Preferences', sub: 'Auto-download, auto-lock, sound', section: 'app_preferences', color: '#3b82f6' },
         { icon: Lock, label: 'Privacy', sub: 'Last seen, read receipts', section: 'privacy', color: '#0ea5e9' },
+        { icon: EyeOff, label: 'Hidden Chats', sub: 'PIN-protected private chats', section: 'hidden_chats', color: '#a855f7' },
         { icon: MessageSquare, label: 'Chats', sub: 'Backup, history, transfer', section: 'chats', color: '#22c55e' },
         { icon: HelpCircle, label: 'Help', sub: 'FAQ, contact us', section: 'help', color: '#6b7280' },
         { icon: Info, label: 'About', sub: 'App info & credits', section: 'about', color: '#ec4899' },
