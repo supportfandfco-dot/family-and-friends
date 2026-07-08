@@ -3,6 +3,7 @@
 //  Real NLP logic. No gimmicks. No fake outputs.
 //  Every function produces genuinely useful results.
 // ═══════════════════════════════════════════════════════════
+import { toMs } from '../utils/timestamp';
 
 // ── Stop words ────────────────────────────────────────────────
 const STOP_WORDS = new Set([
@@ -120,10 +121,12 @@ export function analyzeConversationMood(messages) {
 
   // Check recency — if last message is old, mood is quiet regardless
   const lastMsg = recent[recent.length - 1];
-  const lastMsgAge = lastMsg?.createdAt?.seconds
-    ? (Date.now() / 1000 - lastMsg.createdAt.seconds) / 3600
-    : 0;
-  if (lastMsgAge > 24) return 'quiet';
+  // Field name was wrong (checked .createdAt, but messages actually use
+  // .timestamp) and only handled a Firestore Timestamp's .seconds, not the
+  // ISO-string format newer messages now use — so this recency gate never
+  // actually triggered regardless of how old the last message really was.
+  const lastMsgMs = toMs(lastMsg?.timestamp);
+  if (lastMsgMs && (Date.now() - lastMsgMs) / 1000 / 3600 > 24) return 'quiet';
 
   let pos = 0, neg = 0, urgent = 0, questions = 0;
   recent.forEach(m => {
@@ -580,7 +583,10 @@ export function scoreChatPriority(chat, messages, myUid) {
   });
 
   // Strong recency bonus — recent messages are more important
-  const lastMsgTime = chat.lastMessage?.createdAt?.seconds || 0;
+  // Same field-name/format fix as analyzeConversationMood above —
+  // lastMessage's real field is .timestamp, and toMs() handles both a
+  // Firestore Timestamp (old) and ISO string (new).
+  const lastMsgTime = toMs(chat.lastMessage?.timestamp) / 1000;
   const minutesAgo  = (Date.now() / 1000 - lastMsgTime) / 60;
   if (minutesAgo < 5)   score += 25;
   else if (minutesAgo < 30)  score += 15;
@@ -644,8 +650,9 @@ export function localSemanticSearch(query, messages) {
         }
       });
 
-      // Recency bonus — newer messages score higher
-      const msgTime = m.createdAt?.seconds || 0;
+      // Recency bonus — newer messages score higher. Same field-name/format
+      // fix as above — messages use .timestamp, not .createdAt.
+      const msgTime = toMs(m.timestamp) / 1000;
       const daysAgo = (Date.now() / 1000 - msgTime) / 86400;
       if (daysAgo < 1)  score *= 1.5;
       if (daysAgo < 7)  score *= 1.2;

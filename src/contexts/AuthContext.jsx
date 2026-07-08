@@ -107,7 +107,7 @@ export function AuthProvider({ children }) {
   }, []);
 
   // ── Complete profile setup (after any login method) ──
-  const completeProfile = useCallback(async (uid, identifier, name, avatar = null) => {
+  const completeProfile = useCallback(async (uid, identifier, name, avatar = null, purpose = '') => {
     let finalAvatar = avatar;
     if (avatar && avatar.startsWith('data:')) {
       finalAvatar = await uploadMedia(avatar, `profiles/${uid}/avatar_${Date.now()}`);
@@ -122,6 +122,12 @@ export function AuthProvider({ children }) {
       avatar: finalAvatar || null,
       code,
       about: 'Hey there! I am using Family & Friends.',
+      // PhoneAuth.jsx's onboarding UI collects this (Family/School/Work/
+      // Friends) but was never actually saving it — the selection was
+      // silently discarded. Persisted now so it's available for AI
+      // features (Priority Insights / Conversation Intelligence context)
+      // to actually use going forward.
+      purpose: purpose || '',
       createdAt: serverTimestamp(),
       pushToken: null,
       theme: 'system',

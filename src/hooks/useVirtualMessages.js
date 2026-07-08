@@ -41,6 +41,7 @@ const DATE_SEP_HEIGHT = 40;   // height of date separator row
 export default function useVirtualMessages(messages, containerRef) {
   const [scrollTop, setScrollTop]   = useState(0);
   const [clientHeight, setHeight]   = useState(600);
+  const [heightVersion, setHeightVersion] = useState(0);
   const heightCache                 = useRef(new Map()); // id → measured height
   const rafRef                      = useRef(null);
 
@@ -79,7 +80,7 @@ export default function useVirtualMessages(messages, containerRef) {
       }
     }
     return { offsets, totalHeight: offset };
-  }, [rows]);
+  }, [rows, heightVersion]);
 
   // Throttled scroll handler using RAF
   const handleScroll = useCallback(() => {
@@ -137,8 +138,14 @@ export default function useVirtualMessages(messages, containerRef) {
   const measureRow = useCallback((id, height) => {
     if (heightCache.current.get(id) === height) return;
     heightCache.current.set(id, height);
-    // Force re-offset calculation — trigger state update
-    setScrollTop(t => t);
+    // setScrollTop(t => t) used to sit here — React bails out of re-rendering
+    // when a state update produces the SAME value (Object.is comparison), so
+    // that never actually triggered a recalculation. Newly measured row
+    // heights were updating the cache but never reaching the offsets/
+    // totalHeight computation, silently leaving stale estimated heights in
+    // the virtualized layout. A dedicated version counter guarantees an
+    // actual state change every time.
+    setHeightVersion(v => v + 1);
   }, []);
 
   // Visible slice for rendering

@@ -6,6 +6,7 @@ import { useState, useEffect, useRef, useCallback } from 'react';
 import { X, Eye, Music, Trash2, MoreVertical } from 'lucide-react';
 import { useAuth } from '../../contexts/AuthContext';
 import { db, doc, updateDoc, arrayUnion, deleteDoc, getDoc } from '../../firebase';
+import { formatMsgTime } from '../../utils/timestamp';
 
 const STATUS_DURATION = 5000;
 
@@ -221,9 +222,7 @@ export default function StatusViewer({ groups, startGroupIndex = 0, onClose }) {
         <div className="flex-1">
           <div className="text-white font-bold text-sm">{currentGroup.name}</div>
           <div className="text-white/60 text-xs">
-            {currentStatus.createdAt?.toDate
-              ? new Date(currentStatus.createdAt.toDate()).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'})
-              : 'Just now'}
+            {formatMsgTime(currentStatus.createdAt) || 'Just now'}
           </div>
         </div>
         {/* Music badge */}

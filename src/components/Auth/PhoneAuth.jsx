@@ -97,7 +97,7 @@ export default function PhoneAuth() {
     if (!pendingUser) return;
     setLoading(true);
     try {
-      await completeProfile(pendingUser.uid, pendingUser.email || pendingUser.uid, name.trim(), avatar);
+      await completeProfile(pendingUser.uid, pendingUser.email || pendingUser.uid, name.trim(), avatar, purpose);
     } catch (e) {
       // Silent — handled gracefully
       toast.error(e.message || 'Failed to save profile');
