@@ -680,6 +680,27 @@ export async function setChatPinned(chatId, pinned) {
   await updateDoc(doc(db, 'chats', chatId), { pinned: pinned || false });
 }
 
+// ── Hidden Chats (PIN-protected) ────────────────────────────────
+// Per-user, unlike pinned/archived above (which are shared boolean
+// fields on the chat doc itself) — hiding a chat must be MY OWN private
+// action, not something visible/shared with the other participant, so
+// it lives on my own users/{uid}/settings/hiddenChats doc alongside the
+// PIN, as a plain array of chat ids I've chosen to hide.
+export async function setChatHidden(uid, chatId, hidden) {
+  // arrayUnion/arrayRemove on a top-level field with setDoc+merge is
+  // safe — the unreliable case elsewhere in this file is specifically
+  // DOTTED nested paths (e.g. "unread.uid"), not plain top-level arrays.
+  await setDoc(doc(db, 'users', uid, 'settings', 'hiddenChats'), {
+    hiddenChatIds: hidden ? arrayUnion(chatId) : arrayRemove(chatId),
+  }, { merge: true });
+}
+
+export function subscribeToHiddenChatsSettings(uid, callback) {
+  return onSnapshot(doc(db, 'users', uid, 'settings', 'hiddenChats'), snap => {
+    callback(snap.exists() ? snap.data() : { pinHash: null, hiddenChatIds: [] });
+  });
+}
+
 export async function setChatArchived(chatId, archived) {
   await updateDoc(doc(db, 'chats', chatId), { archived: archived || false });
 }

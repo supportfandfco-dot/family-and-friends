@@ -498,7 +498,7 @@ function AppInner() {
   };
 
   const mainContent = showSettings ? (
-    <Settings onBack={handleBack} />
+    <Settings onBack={handleBack} onOpenChat={(partner, chatId) => { setShowSettings(false); handleSelectChat(partner, chatId); }} />
   ) : activeChat?.type === 'chat' ? (
     <ErrorBoundary onReset={handleBack}>
       <ChatWindow

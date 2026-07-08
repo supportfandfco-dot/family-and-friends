@@ -10,12 +10,13 @@ import {
   db, subscribeToChats, subscribeToGroups, getUserById,
   subscribeToPresence, setChatPinned, setChatArchived, deleteChatForUser,
   setGroupPinned, setGroupArchived, deleteGroupForUser,
+  setChatHidden, subscribeToHiddenChatsSettings,
 } from '../../firebase';
 import { format, isToday, isYesterday } from 'date-fns';
 import {
   Search, Plus, Settings, Phone,
   Star, Users, Zap, ListTodo, Bot, Archive, MessageCircle,
-  ArchiveRestore, Trash2, X, User, Sparkles,
+  ArchiveRestore, Trash2, X, User, Sparkles, Lock,
 } from 'lucide-react';
 import AddContact from '../Contacts/AddContact';
 import StatusTab from '../Status/StatusTab';
@@ -103,7 +104,7 @@ function useLongPress(onLongPress, ms = 500) {
 }
 
 // ── Context menu component ────────────────────────────────
-function ContextMenu({ x, y, item, isGroup, onClose, onArchive, onPin, onDelete }) {
+function ContextMenu({ x, y, item, isGroup, onClose, onArchive, onPin, onDelete, onHide }) {
   const isArchived = item?.archived;
   const isPinned   = item?.pinned;
   return (
@@ -125,6 +126,13 @@ function ContextMenu({ x, y, item, isGroup, onClose, onArchive, onPin, onDelete 
             : <><Archive size={16} className="text-brand-500" /> Archive</>
           }
         </button>
+        {!isGroup && (
+          <button onClick={() => { onHide(); onClose(); }}
+            className="w-full flex items-center gap-3 px-4 py-2.5 text-sm text-[var(--text-primary)] hover:bg-[var(--hover)] transition-colors">
+            <Lock size={16} className="text-brand-500" />
+            Hide
+          </button>
+        )}
         <div className="h-px bg-[var(--border)] mx-3 my-1" />
         <button onClick={() => { onDelete(); onClose(); }}
           className="w-full flex items-center gap-3 px-4 py-2.5 text-sm text-red-400 hover:bg-red-500/10 transition-colors">
@@ -255,6 +263,7 @@ export default function ChatList({ onSelectChat, onSelectGroup, onOpenSettings, 
   const [chatPreviews, setChatPreviews] = useState({});
   const [search, setSearch]           = useState('');
   const [showCreateGroup, setShowCreateGroup] = useState(false);
+  const [hiddenChatIds, setHiddenChatIds] = useState([]);
 
   // Context menu state
   const [menu, setMenu] = useState(null); // { x, y, item, isGroup }
@@ -272,6 +281,13 @@ export default function ChatList({ onSelectChat, onSelectGroup, onOpenSettings, 
   useEffect(() => {
     if (!user) return;
     return subscribeToGroups(user.uid, setGroups);
+  }, [user]);
+
+  useEffect(() => {
+    if (!user) return;
+    return subscribeToHiddenChatsSettings(user.uid, (data) => {
+      setHiddenChatIds(data?.hiddenChatIds || []);
+    });
   }, [user]);
 
   useEffect(() => {
@@ -324,7 +340,9 @@ export default function ChatList({ onSelectChat, onSelectGroup, onOpenSettings, 
   // ── Derived lists ─────────────────────────────────────
   const { allChats, unreadChats, allGroups, unreadGroups, archivedChats, archivedGroups, totalChatUnread } = useMemo(() => {
     const uid = user?.uid;
+    const hiddenSet = new Set(hiddenChatIds);
     const aC = chats.filter(c => {
+      if (hiddenSet.has(c.id)) return false; // hidden chats only appear in the Hidden Chats screen
       if (c.archived) return false;
       const deletedTs = c.deletedFor?.[uid];
       if (deletedTs) {
@@ -342,8 +360,11 @@ export default function ChatList({ onSelectChat, onSelectGroup, onOpenSettings, 
       return !search || g.name?.toLowerCase().includes(search.toLowerCase());
     }).sort((a, b) => (b.pinned ? 1 : 0) - (a.pinned ? 1 : 0));
 
+    // Hidden chats' unread counts stay OUT of the visible total too — a
+    // hidden chat leaking its unread count into the badge would defeat
+    // the point of hiding it in the first place.
     const total = [...chats, ...groups]
-      .filter(c => !c.archived)
+      .filter(c => !c.archived && !hiddenSet.has(c.id))
       .reduce((sum, c) => sum + (c.unread?.[uid] || 0), 0);
 
     return {
@@ -351,11 +372,11 @@ export default function ChatList({ onSelectChat, onSelectGroup, onOpenSettings, 
       unreadChats: aC.filter(c => (c.unread?.[uid] || 0) > 0),
       allGroups: aG,
       unreadGroups: aG.filter(g => (g.unread?.[uid] || 0) > 0),
-      archivedChats: chats.filter(c => c.archived),
+      archivedChats: chats.filter(c => c.archived && !hiddenSet.has(c.id)),
       archivedGroups: groups.filter(g => g.archived),
       totalChatUnread: total,
     };
-  }, [chats, groups, chatPreviews, search, user?.uid]);
+  }, [chats, groups, chatPreviews, search, user?.uid, hiddenChatIds]);
 
   // ── Context menu handlers ─────────────────────────────
   const openMenu = useCallback((e, item, isGroup) => {
@@ -381,6 +402,11 @@ export default function ChatList({ onSelectChat, onSelectGroup, onOpenSettings, 
     if (!menu || !user) return;
     if (menu.isGroup) await deleteGroupForUser(menu.item.id, user.uid);
     else await deleteChatForUser(menu.item.id, user.uid);
+  }, [menu, user]);
+
+  const handleHide = useCallback(async () => {
+    if (!menu || !user || menu.isGroup) return; // groups aren't hideable — only direct chats
+    await setChatHidden(user.uid, menu.item.id, true);
   }, [menu, user]);
 
   // ── Which list to show ────────────────────────────────
@@ -706,6 +732,7 @@ export default function ChatList({ onSelectChat, onSelectGroup, onOpenSettings, 
           onArchive={handleArchive}
           onPin={handlePin}
           onDelete={handleDelete}
+          onHide={handleHide}
         />
       )}
 

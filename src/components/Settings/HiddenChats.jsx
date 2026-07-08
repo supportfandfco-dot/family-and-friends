@@ -3,10 +3,21 @@
 // ═══════════════════════════════════════════════════════
 import { useState, useEffect } from 'react';
 import { useAuth } from '../../contexts/AuthContext';
-import { db } from '../../firebase';
-import { doc, setDoc, getDoc } from 'firebase/firestore';
-import { Lock, Eye, EyeOff, ArrowLeft, Check, AlertCircle } from 'lucide-react';
+import { db, getUserById, setChatHidden } from '../../firebase';
+import { doc, setDoc, getDoc, onSnapshot } from 'firebase/firestore';
+import { Lock, ArrowLeft, Check, AlertCircle, MessageCircle, EyeOff } from 'lucide-react';
 import toast from 'react-hot-toast';
+
+// PIN is hashed before ever reaching Firestore — the previous version
+// compared/stored it in plaintext. A 4-digit PIN is low-entropy enough
+// that hashing alone isn't cryptographically bulletproof, but it's
+// strictly better than plaintext, and matches how a real "forgot my PIN"
+// flow would need to work anyway (compare hashes, never expose the
+// original value).
+async function hashPin(pin) {
+  const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(pin));
+  return Array.from(new Uint8Array(buf)).map(b => b.toString(16).padStart(2, '0')).join('');
+}
 
 // ── PIN pad ───────────────────────────────────────────
 function PinPad({ onComplete, title, subtitle }) {
@@ -61,19 +72,67 @@ function PinPad({ onComplete, title, subtitle }) {
   );
 }
 
+// ── Hidden chat row ───────────────────────────────────
+function HiddenChatRow({ chatId, uid, onOpen, onUnhide }) {
+  const [preview, setPreview] = useState(null); // { partner, chat }
+
+  useEffect(() => {
+    let stale = false;
+    (async () => {
+      try {
+        const chatSnap = await getDoc(doc(db, 'chats', chatId));
+        if (!chatSnap.exists()) return;
+        const chat = { id: chatSnap.id, ...chatSnap.data() };
+        const partnerId = chat.participants?.find(p => p !== uid);
+        if (!partnerId) return;
+        const partner = await getUserById(partnerId);
+        if (!stale) setPreview({ partner, chat });
+      } catch {}
+    })();
+    return () => { stale = true; };
+  }, [chatId, uid]);
+
+  if (!preview?.partner) return null;
+
+  return (
+    <div className="flex items-center gap-3 px-4 py-3 rounded-2xl hover:bg-[var(--hover)] transition-colors">
+      <button onClick={() => onOpen(preview.partner, chatId)} className="flex items-center gap-3 flex-1 min-w-0 text-left">
+        {preview.partner.avatar ? (
+          <img src={preview.partner.avatar} alt="" className="w-11 h-11 rounded-full object-cover flex-shrink-0" />
+        ) : (
+          <div className="w-11 h-11 rounded-full bg-brand-500/20 flex items-center justify-center flex-shrink-0">
+            <MessageCircle size={18} className="text-brand-500" />
+          </div>
+        )}
+        <div className="min-w-0">
+          <p className="text-sm font-semibold text-[var(--text-primary)] truncate">{preview.partner.name || 'Unknown'}</p>
+          <p className="text-xs text-[var(--text-secondary)] truncate">
+            {preview.chat.lastMessage?.content || 'No messages yet'}
+          </p>
+        </div>
+      </button>
+      <button onClick={() => onUnhide(chatId)} title="Unhide"
+        className="w-9 h-9 rounded-xl hover:bg-[var(--hover)] flex items-center justify-center flex-shrink-0">
+        <EyeOff size={16} className="text-[var(--text-secondary)]" />
+      </button>
+    </div>
+  );
+}
+
 // ═══════════════════════════════════════════════════════
-export default function HiddenChats({ onBack }) {
+export default function HiddenChats({ onBack, onOpenChat }) {
   const { user } = useAuth();
-  const [screen, setScreen] = useState('loading'); // loading | setup | verify | list | change_pin
-  const [confirmPin, setConfirmPin] = useState('');
+  const [screen, setScreen] = useState('loading'); // loading | setup | confirm | verify | list
   const [tempPin, setTempPin] = useState('');
   const [unlocked, setUnlocked] = useState(false);
   const [error, setError] = useState('');
+  const [hiddenChatIds, setHiddenChatIds] = useState([]);
 
   useEffect(() => {
     if (!user) return;
     getDoc(doc(db, 'users', user.uid, 'settings', 'hiddenChats')).then(snap => {
-      if (snap.exists() && snap.data().pin) {
+      const data = snap.data();
+      if (snap.exists() && data?.pinHash) {
         setScreen('verify');
       } else {
         setScreen('setup');
@@ -81,9 +140,20 @@ export default function HiddenChats({ onBack }) {
     }).catch(() => setScreen('setup'));
   }, [user]);
 
-  const savePin = async (pin) => {
+  // Live-updating list of hidden chat ids, once unlocked — so hiding a
+  // chat from ChatList's long-press menu while this screen is open (or in
+  // another tab) reflects immediately, not just on next open.
+  useEffect(() => {
+    if (!user || !unlocked) return;
+    return onSnapshot(doc(db, 'users', user.uid, 'settings', 'hiddenChats'), snap => {
+      setHiddenChatIds(snap.data()?.hiddenChatIds || []);
+    });
+  }, [user, unlocked]);
+
+  const savePinHash = async (pin) => {
+    const pinHash = await hashPin(pin);
     await setDoc(doc(db, 'users', user.uid, 'settings', 'hiddenChats'), {
-      pin,
+      pinHash,
       updatedAt: new Date().toISOString(),
     }, { merge: true });
   };
@@ -100,7 +170,7 @@ export default function HiddenChats({ onBack }) {
       setTempPin('');
       return;
     }
-    await savePin(pin);
+    await savePinHash(pin);
     toast.success('Hidden Chats PIN set!');
     setUnlocked(true);
     setScreen('list');
@@ -108,14 +178,24 @@ export default function HiddenChats({ onBack }) {
 
   const handleVerify = async (pin) => {
     const snap = await getDoc(doc(db, 'users', user.uid, 'settings', 'hiddenChats'));
-    const stored = snap.data()?.pin;
-    if (pin === stored) {
+    const storedHash = snap.data()?.pinHash;
+    const enteredHash = await hashPin(pin);
+    if (enteredHash === storedHash) {
       setUnlocked(true);
       setScreen('list');
       setError('');
     } else {
       setError('Wrong PIN. Try again.');
     }
+  };
+
+  const handleUnhide = async (chatId) => {
+    await setChatHidden(user.uid, chatId, false);
+    toast.success('Chat unhidden');
+  };
+
+  const handleOpen = (partner, chatId) => {
+    onOpenChat?.(partner, chatId);
   };
 
   return (
@@ -176,11 +256,25 @@ export default function HiddenChats({ onBack }) {
               </div>
             </div>
 
-            <div className="text-center py-12">
-              <Lock size={28} className="mx-auto text-[var(--text-secondary)] opacity-30 mb-3"/>
-              <p className="text-sm text-[var(--text-secondary)]">No hidden chats yet</p>
-              <p className="text-xs text-[var(--text-secondary)] mt-1">Chats you hide will appear here</p>
-            </div>
+            {hiddenChatIds.length === 0 ? (
+              <div className="text-center py-12">
+                <Lock size={28} className="mx-auto text-[var(--text-secondary)] opacity-30 mb-3"/>
+                <p className="text-sm text-[var(--text-secondary)]">No hidden chats yet</p>
+                <p className="text-xs text-[var(--text-secondary)] mt-1">Chats you hide will appear here</p>
+              </div>
+            ) : (
+              <div className="space-y-1">
+                {hiddenChatIds.map(chatId => (
+                  <HiddenChatRow
+                    key={chatId}
+                    chatId={chatId}
+                    uid={user.uid}
+                    onOpen={handleOpen}
+                    onUnhide={handleUnhide}
+                  />
+                ))}
+              </div>
+            )}
 
             <button onClick={() => { setScreen('setup'); setTempPin(''); setError(''); }}
               className="w-full py-3 bg-[var(--hover)] border border-[var(--border)] rounded-xl text-sm font-semibold text-[var(--text-primary)] hover:border-brand-400 transition-all">
