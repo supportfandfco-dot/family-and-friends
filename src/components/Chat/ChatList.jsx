@@ -7,12 +7,14 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { useAuth } from '../../contexts/AuthContext';
 import {
-  db, subscribeToChats, subscribeToGroups, getUserById,
+  getUserById, getContacts,
+  subscribeToChats, subscribeToGroups,
   subscribeToPresence, setChatPinned, setChatArchived, deleteChatForUser,
   setGroupPinned, setGroupArchived, deleteGroupForUser,
   setChatHidden, subscribeToHiddenChatsSettings,
-} from '../../firebase';
+} from '../../supabase';
 import { format, isToday, isYesterday } from 'date-fns';
+import { toMs } from '../../utils/timestamp';
 import {
   Search, Plus, Settings, Phone,
   Star, Users, Zap, ListTodo, Bot, Archive, MessageCircle,
@@ -272,9 +274,7 @@ export default function ChatList({ onSelectChat, onSelectGroup, onOpenSettings, 
   useEffect(() => {
     if (!user) return;
     return subscribeToChats(user.uid, raw =>
-      setChats(raw.sort((a, b) =>
-        (b.lastMessage?.timestamp?.seconds || 0) - (a.lastMessage?.timestamp?.seconds || 0)
-      ))
+      setChats(raw.sort((a, b) => toMs(b.lastMessage?.timestamp) - toMs(a.lastMessage?.timestamp)))
     );
   }, [user]);
 
@@ -291,13 +291,17 @@ export default function ChatList({ onSelectChat, onSelectGroup, onOpenSettings, 
   }, [user]);
 
   useEffect(() => {
-    if (!profile?.contacts?.length) { setContacts([]); return; }
+    if (!user) { setContacts([]); return; }
     let stale = false;
-    Promise.all(profile.contacts.map(id => getUserById(id)))
+    // profile.contacts (an array field on the old Firestore user doc)
+    // doesn't exist in the Supabase schema — contacts are a proper
+    // junction table now (contacts.user_id/contact_id), which is what
+    // getContacts() queries.
+    getContacts(user.uid)
       .then(list => { if (!stale) setContacts(list.filter(Boolean)); })
       .catch(() => {});
     return () => { stale = true; };
-  }, [profile?.contacts?.join?.(',')]);
+  }, [user?.uid]);
 
   // Load chat partner profiles — batch load to prevent ghost chats
   useEffect(() => {
@@ -344,12 +348,13 @@ export default function ChatList({ onSelectChat, onSelectGroup, onOpenSettings, 
     const aC = chats.filter(c => {
       if (hiddenSet.has(c.id)) return false; // hidden chats only appear in the Hidden Chats screen
       if (c.archived) return false;
-      const deletedTs = c.deletedFor?.[uid];
-      if (deletedTs) {
-        const deletedMs = deletedTs?.seconds ? deletedTs.seconds * 1000 : Number(deletedTs);
-        const lastMsgMs = c.lastMessage?.timestamp?.seconds ? c.lastMessage.timestamp.seconds * 1000 : 0;
-        if (lastMsgMs <= deletedMs) return false;
-      }
+      // deletedFor is now a simple per-user boolean flag (deleted_for is a
+      // plain array column in Postgres), not a {uid: timestamp} map like
+      // Firestore had — so a new message no longer automatically
+      // "un-deletes" a chat the way it used to. Deleting now hides a chat
+      // until manually reopened. Flag if the old auto-restore behavior is
+      // wanted back (would need deleted_for to store timestamps again).
+      if (c.deletedFor?.[uid]) return false;
       const p = chatPreviews[c.id];
       return !search || p?.name?.toLowerCase().includes(search.toLowerCase());
     }).sort((a, b) => (b.pinned ? 1 : 0) - (a.pinned ? 1 : 0));
@@ -387,16 +392,16 @@ export default function ChatList({ onSelectChat, onSelectGroup, onOpenSettings, 
   }, []);
 
   const handleArchive = useCallback(async (archived) => {
-    if (!menu) return;
-    if (menu.isGroup) await setGroupArchived(menu.item.id, archived);
-    else await setChatArchived(menu.item.id, archived);
-  }, [menu]);
+    if (!menu || !user) return;
+    if (menu.isGroup) await setGroupArchived(menu.item.id, user.uid, archived);
+    else await setChatArchived(menu.item.id, user.uid, archived);
+  }, [menu, user]);
 
   const handlePin = useCallback(async (pinned) => {
-    if (!menu) return;
-    if (menu.isGroup) await setGroupPinned(menu.item.id, pinned);
-    else await setChatPinned(menu.item.id, pinned);
-  }, [menu]);
+    if (!menu || !user) return;
+    if (menu.isGroup) await setGroupPinned(menu.item.id, user.uid, pinned);
+    else await setChatPinned(menu.item.id, user.uid, pinned);
+  }, [menu, user]);
 
   const handleDelete = useCallback(async () => {
     if (!menu || !user) return;
