@@ -166,6 +166,36 @@ export async function checkIsBlocked(uid, targetUid) {
   return !!data;
 }
 
+// Live version of checkIsBlocked — replaces ChatWindow.jsx's raw
+// onSnapshot(doc(db,'users',uid)) watch of the user's own blocked list.
+export function subscribeToBlockedStatus(uid, targetUid, callback) {
+  checkIsBlocked(uid, targetUid).then(callback);
+  const channel = supabase
+    .channel(`blocked:${uid}:${targetUid}`)
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'blocked_users', filter: `user_id=eq.${uid}` },
+      () => checkIsBlocked(uid, targetUid).then(callback))
+    .subscribe();
+  return () => supabase.removeChannel(channel);
+}
+
+// Live typing status for the OTHER participant — replaces ChatWindow.jsx's
+// raw onSnapshot(doc(db,'chats',chatId)) watch of the typing map.
+export function subscribeToTyping(chatId, partnerId, callback, isGroup = false) {
+  const table = isGroup ? 'groups' : 'chats';
+  const evaluate = (row) => {
+    const ts = row?.typing?.[partnerId];
+    const ms = ts ? new Date(ts).getTime() : null;
+    callback(!!(ms && Date.now() - ms < 4000));
+  };
+  supabase.from(table).select('typing').eq('id', chatId).single().then(({ data }) => evaluate(data));
+  const channel = supabase
+    .channel(`typing:${chatId}`)
+    .on('postgres_changes', { event: 'UPDATE', schema: 'public', table, filter: `id=eq.${chatId}` },
+      (payload) => evaluate(payload.new))
+    .subscribe();
+  return () => supabase.removeChannel(channel);
+}
+
 // ── Direct Chats ─────────────────────────────────────────────
 // Canonical ordering enforced (matches the schema's CHECK constraint) —
 // always insert/query with the smaller uuid as user1_id.
@@ -192,9 +222,42 @@ export async function getOrCreateChat(uidA, uidB) {
   return data.id;
 }
 
-export async function sendMessage(chatId, senderId, content, type = 'text', extra = {}) {
+// Normalizes a raw messages/group_messages row into the shape the entire
+// existing app expects — senderId, timestamp, fileName, editedAt (all
+// camelCase) instead of Postgres's sender_id/created_at/file_name/
+// edited_at. Without this, every single read of msg.senderId or
+// msg.timestamp throughout the whole message UI would silently be
+// undefined the moment this went live.
+function normalizeMessage(row) {
+  if (!row) return row;
+  return {
+    ...row,
+    senderId: row.sender_id,
+    timestamp: row.created_at,
+    fileName: row.file_name,
+    editedAt: row.edited_at,
+    deletedForEveryone: row.deleted_for_everyone,
+    deletedFor: row.deleted_for || [],
+    replyTo: row.reply_to,
+  };
+}
+
+// Converts the camelCase keys UI code passes in `extra` (fileName,
+// fileSize, replyTo) into the actual snake_case column names — without
+// this, inserting `extra` directly would try to write to columns that
+// don't exist (Postgres has file_name, not fileName).
+const EXTRA_FIELD_MAP = { fileName: 'file_name', fileSize: 'file_size', replyTo: 'reply_to' };
+function mapExtraFields(extra) {
+  const mapped = {};
+  for (const [k, v] of Object.entries(extra || {})) {
+    mapped[EXTRA_FIELD_MAP[k] || k] = v;
+  }
+  return mapped;
+}
+
+export async function sendMessage(chatId, senderId, content, type = 'text', extra = {}, senderName = '') {
   const { data: msg, error } = await supabase.from('messages').insert({
-    chat_id: chatId, sender_id: senderId, content, type, ...extra,
+    chat_id: chatId, sender_id: senderId, content, type, sender_name: senderName, ...mapExtraFields(extra),
   }).select('id, created_at').single();
   if (error) throw error;
 
@@ -210,7 +273,7 @@ export async function sendMessage(chatId, senderId, content, type = 'text', extr
     // mimic Firestore's Timestamp shape, but new Date({seconds: N}) does
     // NOT parse correctly — it produces an Invalid Date. Better to just
     // match the real shape the UI wants than to fake an old one badly.
-    last_message: { content, type, senderId, id: msg.id, timestamp: msg.created_at },
+    last_message: { content, type, senderId, senderName, id: msg.id, timestamp: msg.created_at },
   }).eq('id', chatId);
 
   // Atomic increment via a Postgres RPC (see schema/functions in
@@ -230,16 +293,16 @@ export function subscribeToMessages(chatId, callback) {
   supabase.from('messages').select('*').eq('chat_id', chatId)
     .order('created_at', { ascending: false }).limit(60)
     .then(({ data }) => {
-      messages = (data || []).reverse();
+      messages = (data || []).reverse().map(normalizeMessage);
       callback(messages);
     });
 
   const channel = supabase
     .channel(`messages:${chatId}`)
     .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'messages', filter: `chat_id=eq.${chatId}` },
-      (payload) => { messages = [...messages, payload.new]; callback(messages); })
+      (payload) => { messages = [...messages, normalizeMessage(payload.new)]; callback(messages); })
     .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'messages', filter: `chat_id=eq.${chatId}` },
-      (payload) => { messages = messages.map(m => m.id === payload.new.id ? payload.new : m); callback(messages); })
+      (payload) => { messages = messages.map(m => m.id === payload.new.id ? normalizeMessage(payload.new) : m); callback(messages); })
     .subscribe();
 
   return () => supabase.removeChannel(channel);
@@ -293,6 +356,130 @@ export function subscribeToChats(uid, callback) {
 
 export async function markMessagesRead(chatId, uid) {
   await supabase.from('chat_unread').update({ count: 0 }).eq('chat_id', chatId).eq('user_id', uid);
+  // Mark other participants' messages as seen — mirrors the old
+  // Firestore version's batch update, just as a plain SQL UPDATE here.
+  await supabase.from('messages').update({ status: 'seen' })
+    .eq('chat_id', chatId).neq('sender_id', uid).neq('status', 'seen');
+}
+
+// ── Typing indicators ────────────────────────────────────────
+// Same simple "map on the chat/group row" pattern the original Firestore
+// version used, not a separate Realtime Presence channel.
+export async function setTyping(chatId, uid, isGroup = false) {
+  const table = isGroup ? 'groups' : 'chats';
+  const { data } = await supabase.from(table).select('typing').eq('id', chatId).single();
+  const typing = { ...(data?.typing || {}), [uid]: new Date().toISOString() };
+  await supabase.from(table).update({ typing }).eq('id', chatId);
+}
+export async function clearTyping(chatId, uid, isGroup = false) {
+  const table = isGroup ? 'groups' : 'chats';
+  const { data } = await supabase.from(table).select('typing').eq('id', chatId).single();
+  const typing = { ...(data?.typing || {}) };
+  delete typing[uid];
+  await supabase.from(table).update({ typing }).eq('id', chatId);
+}
+
+// ── Reactions ─────────────────────────────────────────────────
+export async function addReaction(chatId, msgId, uid, emoji, isGroup = false) {
+  const table = isGroup ? 'group_messages' : 'messages';
+  const { data } = await supabase.from(table).select('reactions').eq('id', msgId).single();
+  const reactions = { ...(data?.reactions || {}) };
+  const current = reactions[emoji] || [];
+  const updated = current.includes(uid) ? current.filter(id => id !== uid) : [...current, uid];
+  if (updated.length === 0) delete reactions[emoji];
+  else reactions[emoji] = updated;
+  await supabase.from(table).update({ reactions }).eq('id', msgId);
+}
+
+// ── Delete / Edit message ────────────────────────────────────
+export async function deleteMessageForMe(chatId, msgId, uid, isGroup = false) {
+  const table = isGroup ? 'group_messages' : 'messages';
+  await supabase.rpc('array_append_uid', { p_table: table, p_column: 'deleted_for', p_id: msgId, p_uid: uid });
+}
+export async function deleteMessageForEveryone(chatId, msgId, isGroup = false) {
+  const table = isGroup ? 'group_messages' : 'messages';
+  await supabase.from(table).update({ content: '', type: 'deleted', deleted_for_everyone: true }).eq('id', msgId);
+}
+export async function deleteMultipleMessages(chatId, msgIds, uid, forAll = false, isGroup = false) {
+  const table = isGroup ? 'group_messages' : 'messages';
+  if (forAll) {
+    await supabase.from(table).update({ content: '', type: 'deleted', deleted_for_everyone: true }).in('id', msgIds);
+  } else {
+    await Promise.all(msgIds.map(id => supabase.rpc('array_append_uid', { p_table: table, p_column: 'deleted_for', p_id: id, p_uid: uid })));
+  }
+}
+export async function editMessage(chatId, msgId, newContent, isGroup = false) {
+  const table = isGroup ? 'group_messages' : 'messages';
+  await supabase.from(table).update({ content: newContent, edited: true, edited_at: new Date().toISOString() }).eq('id', msgId);
+}
+
+// ── Forward message ──────────────────────────────────────────
+// targets: [{id, isGroup}]
+export async function forwardMessage(msg, targets, senderUid) {
+  const MAX_CONTENT_LEN = 900_000;
+  const content = msg.content || '';
+  const isOversized = typeof content === 'string' && content.length > MAX_CONTENT_LEN;
+  const finalContent = isOversized ? '[Media — too large to forward]' : content;
+  const finalType    = isOversized ? 'text' : (msg.type || 'text');
+
+  const extra = { forwarded: true };
+  if (msg.fileName != null) extra.file_name = msg.fileName;
+
+  await Promise.all(targets.map(async ({ id, isGroup }) => {
+    if (isGroup) return sendGroupMessage(id, senderUid, finalContent, finalType, extra);
+    const chatId = await getOrCreateChat(senderUid, id);
+    return sendMessage(chatId, senderUid, finalContent, finalType, extra);
+  }));
+}
+
+// ── Mute chat/group ───────────────────────────────────────────
+export async function muteChat(uid, chatId, muted, isGroup = false) {
+  await supabase.rpc(muted ? 'array_append_uid' : 'array_remove_uid', {
+    p_table: isGroup ? 'groups' : 'chats', p_column: 'muted_by', p_id: chatId, p_uid: uid,
+  });
+}
+
+// ── Pagination ────────────────────────────────────────────────
+// beforeCreatedAt: an ISO timestamp string (the oldest message currently
+// loaded) — Postgres cursor pagination via a plain WHERE created_at < X,
+// simpler than Firestore's startAfter(docSnapshot) since there's no
+// document-reference cursor object to carry around.
+export async function clearChat(chatId, uid, isGroup = false) {
+  const table = isGroup ? 'group_messages' : 'messages';
+  const idCol = isGroup ? 'group_id' : 'chat_id';
+  const { data } = await supabase.from(table).select('id').eq(idCol, chatId).limit(500);
+  await Promise.all((data || []).map(row =>
+    supabase.rpc('array_append_uid', { p_table: table, p_column: 'deleted_for', p_id: row.id, p_uid: uid })
+  ));
+}
+
+export async function loadOlderMessages(chatId, beforeCreatedAt, pageSize = 40) {
+  const { data } = await supabase.from('messages').select('*')
+    .eq('chat_id', chatId).lt('created_at', beforeCreatedAt)
+    .order('created_at', { ascending: false }).limit(pageSize);
+  return (data || []).reverse().map(normalizeMessage);
+}
+export async function loadOlderGroupMessages(groupId, beforeCreatedAt, pageSize = 40) {
+  const { data } = await supabase.from('group_messages').select('*')
+    .eq('group_id', groupId).lt('created_at', beforeCreatedAt)
+    .order('created_at', { ascending: false }).limit(pageSize);
+  return (data || []).reverse().map(normalizeMessage);
+}
+
+// ── Push notification ─────────────────────────────────────────
+export async function sendPushNotification(recipientUid, title, body, data = {}) {
+  try {
+    const { data: recipient } = await supabase.from('profiles').select('push_token').eq('id', recipientUid).single();
+    const token = recipient?.push_token;
+    if (!token) return;
+    await fetch('/api/send-push', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ token, title, body, data }),
+    });
+  } catch {
+    // Push send failed — non-critical, app continues
+  }
 }
 
 export async function setChatPinned(chatId, uid, pinned) {
@@ -374,14 +561,14 @@ export async function createGroup(name, adminId, memberIds, photoUrl = null) {
   return group.id;
 }
 
-export async function sendGroupMessage(groupId, senderId, content, type = 'text', extra = {}) {
+export async function sendGroupMessage(groupId, senderId, content, type = 'text', extra = {}, senderName = '') {
   const { data: msg, error } = await supabase.from('group_messages').insert({
-    group_id: groupId, sender_id: senderId, content, type, ...extra,
+    group_id: groupId, sender_id: senderId, content, type, sender_name: senderName, ...mapExtraFields(extra),
   }).select('id, created_at').single();
   if (error) throw error;
 
   await supabase.from('groups').update({
-    last_message: { content, type, senderId, id: msg.id, timestamp: msg.created_at },
+    last_message: { content, type, senderId, senderName, id: msg.id, timestamp: msg.created_at },
   }).eq('id', groupId);
 
   const { data: members } = await supabase.from('group_members').select('user_id').eq('group_id', groupId);
@@ -397,12 +584,12 @@ export function subscribeToGroupMessages(groupId, callback) {
   let messages = [];
   supabase.from('group_messages').select('*').eq('group_id', groupId)
     .order('created_at', { ascending: false }).limit(60)
-    .then(({ data }) => { messages = (data || []).reverse(); callback(messages); });
+    .then(({ data }) => { messages = (data || []).reverse().map(normalizeMessage); callback(messages); });
 
   const channel = supabase
     .channel(`group_messages:${groupId}`)
     .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'group_messages', filter: `group_id=eq.${groupId}` },
-      (payload) => { messages = [...messages, payload.new]; callback(messages); })
+      (payload) => { messages = [...messages, normalizeMessage(payload.new)]; callback(messages); })
     .subscribe();
   return () => supabase.removeChannel(channel);
 }

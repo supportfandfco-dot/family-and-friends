@@ -12,15 +12,16 @@ import {
 } from 'lucide-react';
 import { useAuth } from '../../contexts/AuthContext';
 import {
-  db, getOrCreateChat, sendMessage, subscribeToMessages,
+  getOrCreateChat, sendMessage, subscribeToMessages,
   setTyping, clearTyping, markMessagesRead,
   deleteMessageForMe, deleteMessageForEveryone, deleteMultipleMessages,
-  editMessage, forwardMessage, muteChat, blockUser, clearChat,
-  subscribeToPresence, setOnline, checkIsBlocked,
+  editMessage, forwardMessage, muteChat, blockUser, unblockUser, clearChat,
+  subscribeToPresence, setOnline, subscribeToBlockedStatus, subscribeToTyping,
   addReaction, getUserById, subscribeToGroups, loadOlderMessages,
-  doc, onSnapshot, addDoc, collection, serverTimestamp,
-  sendPushNotification, makePreview, uploadMedia
-} from '../../firebase';
+  sendPushNotification,
+} from '../../supabase';
+import { makePreview } from '../../utils/messagePreview';
+import { uploadMedia } from '../../mediaUpload';
 import { VoiceRecorder, VoiceMessage } from './VoiceNote';
 import CameraCapture from '../Camera/CameraCapture';
 import toast from 'react-hot-toast';
@@ -622,11 +623,7 @@ export default function ChatWindow({ chatPartner, onBack, onVoiceCall, onVideoCa
   // if they blocked us, we should NOT show any indicator (WhatsApp-style privacy)
   useEffect(() => {
     if (!user?.uid || !chatPartner?.id) return;
-    const unsub = onSnapshot(doc(db, 'users', user.uid), snap => {
-      const myBlocked = snap.data()?.blocked || [];
-      setBlocked(myBlocked.includes(chatPartner.id));
-    });
-    return unsub;
+    return subscribeToBlockedStatus(user.uid, chatPartner.id, setBlocked);
   }, [user?.uid, chatPartner?.id]);
 
   // Messages
@@ -677,12 +674,7 @@ export default function ChatWindow({ chatPartner, onBack, onVoiceCall, onVideoCa
   // Typing subscription
   useEffect(() => {
     if (!chatId || !chatPartner) return;
-    const unsub = onSnapshot(doc(db, 'chats', chatId), snap => {
-      const theirTyping = snap.data()?.typing?.[chatPartner.id];
-      const ts = theirTyping?.seconds ? theirTyping.seconds * 1000 : theirTyping;
-      setPartnerTyping(!!(ts && Date.now() - ts < 4000));
-    });
-    return unsub;
+    return subscribeToTyping(chatId, chatPartner.id, setPartnerTyping, false);
   }, [chatId, chatPartner?.id]);
 
   // Scroll managed by VirtualMessageList
@@ -854,7 +846,8 @@ export default function ChatWindow({ chatPartner, onBack, onVoiceCall, onVideoCa
     });
     if (!ok) return;
     try {
-      await blockUser(user.uid, chatPartner.id, newBlocked);
+      if (newBlocked) await blockUser(user.uid, chatPartner.id);
+      else await unblockUser(user.uid, chatPartner.id);
       toast.success(newBlocked ? chatPartner.name + ' blocked' : chatPartner.name + ' unblocked');
     } catch { toast.error('Action failed'); }
     setShowMenu(false);
@@ -951,14 +944,18 @@ export default function ChatWindow({ chatPartner, onBack, onVoiceCall, onVideoCa
     nextResult: searchNext,
   } = useMessageSearch(visible);
 
-  // Last seen label — RTDB stores timestamps as ms numbers
+  // Last seen label — presence.lastSeen is now a plain ISO string from
+  // Supabase (was an RTDB ms number before that, and a Firestore
+  // Timestamp before THAT) — Number(isoString) is NaN, it doesn't parse
+  // date strings, so that fallback needed a real Date parse added, not
+  // just a number cast.
   const formatLastSeen = ts => {
     if (!ts) return 'Family & Friends';
-    // Handle Firestore Timestamp, RTDB ms number, or Date
     let ms;
-    if (ts?.toDate) ms = ts.toDate().getTime();           // Firestore Timestamp
-    else if (ts?.seconds) ms = ts.seconds * 1000;         // Firestore plain object
-    else ms = typeof ts === 'number' ? ts : Number(ts);   // RTDB ms or fallback
+    if (ts?.toDate) ms = ts.toDate().getTime();           // Firestore Timestamp (legacy)
+    else if (ts?.seconds) ms = ts.seconds * 1000;         // Firestore plain object (legacy)
+    else if (typeof ts === 'number') ms = ts;              // RTDB ms number (legacy)
+    else ms = new Date(ts).getTime();                      // ISO string (current)
     if (!ms || isNaN(ms)) return 'Family & Friends';
     const d = new Date(ms);
     const now = Date.now();
