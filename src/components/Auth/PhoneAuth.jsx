@@ -1,16 +1,13 @@
-// ═══════════════════════════════════════════════════════
-//  PhoneAuth — Login Screen (Email · Google)
-//  Family & Friends  ·  Built by Ishrit Sachdeva
-// ═══════════════════════════════════════════════════════
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useAuth } from '../../contexts/AuthContext';
-import { doc, getDoc } from 'firebase/firestore';
-import { db } from '../../firebase';
 import toast from 'react-hot-toast';
 import { Eye, EyeOff, ArrowLeft, MessageSquare } from 'lucide-react';
 
 export default function PhoneAuth() {
-  const { loginWithGoogle, loginWithEmail, registerWithEmail, sendPasswordReset, completeProfile } = useAuth();
+  const {
+    user, profile, loading: authLoading,
+    loginWithGoogle, loginWithEmail, registerWithEmail, sendPasswordReset, completeProfile,
+  } = useAuth();
 
   const [step,       setStep]       = useState('login');
   const [loading,    setLoading]    = useState(false);
@@ -24,21 +21,34 @@ export default function PhoneAuth() {
   const [avatar,     setAvatar]     = useState(null);
   const [purpose,    setPurpose]    = useState('');
 
-  const checkProfile = async (u) => {
-    const snap = await getDoc(doc(db, 'users', u.uid));
-    if (!snap.exists()) {
-      setPendingUser(u);
-      if (u.displayName) setName(u.displayName);
-      if (u.photoURL)    setAvatar(u.photoURL);
-      setStep('profile');
-    }
-  };
+  useEffect(() => {
+    if (authLoading || !user || profile) return;
+    setPendingUser(user);
+    const meta = user.user_metadata || {};
+    if (meta.full_name || meta.name) setName(meta.full_name || meta.name);
+    if (meta.avatar_url || meta.picture) setAvatar(meta.avatar_url || meta.picture);
+    setStep('profile');
+  }, [user, profile, authLoading]);
 
   const handleGoogle = async () => {
     setLoading(true);
-    try { await checkProfile(await loginWithGoogle()); }
-    catch (e) { toast.error(e.message || 'Google sign-in failed'); }
-    finally { setLoading(false); }
+    try {
+      await loginWithGoogle();
+    } catch (e) {
+      toast.error(e.message || 'Google sign-in failed');
+      setLoading(false);
+    }
+  };
+
+  const friendlyAuthError = (e) => {
+    const msg = e?.message || '';
+    if (/invalid login credentials/i.test(msg)) return 'Incorrect email or password';
+    if (/user already registered/i.test(msg)) return 'Email already registered — try signing in';
+    if (/password should be at least/i.test(msg)) return 'Password must be at least 6 characters';
+    if (/unable to validate email/i.test(msg) || /invalid email/i.test(msg)) return 'Invalid email address';
+    if (/rate limit/i.test(msg)) return 'Too many attempts. Try again later';
+    if (/network/i.test(msg)) return 'Network error — check your connection';
+    return msg || 'Authentication failed';
   };
 
   const handleEmail = async () => {
@@ -47,22 +57,14 @@ export default function PhoneAuth() {
     if (isRegister && password.length < 6)  { toast.error('Password must be at least 6 characters'); return; }
     setLoading(true);
     try {
-      const u = isRegister
-        ? await registerWithEmail(email.trim(), password)
-        : await loginWithEmail(email.trim(), password);
       if (isRegister) {
+        await registerWithEmail(email.trim(), password);
         toast.success('Account created! Check your email to verify your account.', { duration: 6000 });
+      } else {
+        await loginWithEmail(email.trim(), password);
       }
-      await checkProfile(u);
     } catch (e) {
-      const msg = e.code === 'auth/user-not-found'       ? 'No account found with this email'
-                : e.code === 'auth/wrong-password'       ? 'Incorrect password'
-                : e.code === 'auth/invalid-credential'   ? 'Incorrect email or password'
-                : e.code === 'auth/email-already-in-use' ? 'Email already registered — try signing in'
-                : e.code === 'auth/invalid-email'        ? 'Invalid email address'
-                : e.code === 'auth/network-request-failed' ? 'Network error — check your connection'
-                : e.message || 'Authentication failed';
-      toast.error(msg);
+      toast.error(friendlyAuthError(e));
     } finally { setLoading(false); }
   };
 
@@ -74,11 +76,7 @@ export default function PhoneAuth() {
       toast.success('Reset link sent! Check your inbox and spam folder.');
       setStep('login');
     } catch (e) {
-      const msg = e?.code === 'auth/user-not-found'    ? 'No account found with this email.' :
-                  e?.code === 'auth/invalid-email'     ? 'Invalid email address.' :
-                  e?.code === 'auth/too-many-requests' ? 'Too many attempts. Try again later.' :
-                  `Error: ${e?.message || 'Failed to send reset email'}`;
-      toast.error(msg);
+      toast.error(friendlyAuthError(e));
     }
     finally { setLoading(false); }
   };
@@ -97,9 +95,8 @@ export default function PhoneAuth() {
     if (!pendingUser) return;
     setLoading(true);
     try {
-      await completeProfile(pendingUser.uid, pendingUser.email || pendingUser.uid, name.trim(), avatar, purpose);
+      await completeProfile(pendingUser.id || pendingUser.uid, pendingUser.email || pendingUser.id, name.trim(), avatar, purpose);
     } catch (e) {
-      // Silent — handled gracefully
       toast.error(e.message || 'Failed to save profile');
     } finally { setLoading(false); }
   };
