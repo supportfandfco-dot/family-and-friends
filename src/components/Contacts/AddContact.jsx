@@ -63,7 +63,7 @@ export default function AddContact({ onClose, onContactAdded }) {
   const handleAdd = async (contact) => {
     try {
       if (contactIds.has(contact.id)) { toast('Already in contacts'); return; }
-      await addContact(user.uid, contact.id);
+      await addContact(contact.id);
       setContactIds(prev => new Set(prev).add(contact.id));
       setAdded(prev => ({ ...prev, [contact.id]: true }));
       toast.success(`${contact.name} added to contacts!`);

@@ -132,13 +132,14 @@ export async function updateProfile(uid, updates) {
 }
 
 // ── Contacts ─────────────────────────────────────────────────
-export async function addContact(uid, contactId) {
+export async function addContact(contactId) {
   // Bidirectional — matches the old array-based "adds you to their
-  // contacts too" behavior. Two inserts instead of two array unions.
-  const { error } = await supabase.from('contacts').insert([
-    { user_id: uid, contact_id: contactId },
-    { user_id: contactId, contact_id: uid },
-  ]);
+  // contacts too" behavior. Done via an RPC (add_contact_pair, uses
+  // auth.uid() + SECURITY DEFINER) rather than two direct inserts —
+  // inserting the reciprocal row {user_id: contactId, contact_id: uid}
+  // as the logged-in user violates a "you can only insert your own
+  // rows" RLS policy on `contacts`, which fails the whole batch insert.
+  const { error } = await supabase.rpc('add_contact_pair', { p_contact_id: contactId });
   if (error) throw error;
 }
 
