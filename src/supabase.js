@@ -15,6 +15,21 @@
 // ═══════════════════════════════════════════════════════════
 import { supabase } from './supabaseClient';
 
+// Every subscribe* function below creates a realtime channel named after
+// the id it's watching (e.g. `groups:${uid}`). Supabase reuses the SAME
+// channel object when .channel(name) is called again with a name that's
+// still active, and attaching a new .on() listener to a channel that's
+// already been .subscribe()'d throws ("cannot add postgres_changes
+// callbacks ... after subscribe()"). Several of these are legitimately
+// called more than once concurrently for the same id — subscribeToGroups
+// alone is called independently by ChatList.jsx, ChatWindow.jsx, and
+// GroupChat.jsx, all for the same uid — so the id can't be the whole
+// channel name. Appending a random suffix per call guarantees every
+// subscription gets its own channel.
+function uniqueChannel(name) {
+  return supabase.channel(`${name}:${Math.random().toString(36).slice(2, 10)}`);
+}
+
 // ── Auth ─────────────────────────────────────────────────────
 export async function signUpWithEmail(email, password) {
   const { data, error } = await supabase.auth.signUp({ email, password });
@@ -171,8 +186,7 @@ export async function checkIsBlocked(uid, targetUid) {
 // onSnapshot(doc(db,'users',uid)) watch of the user's own blocked list.
 export function subscribeToBlockedStatus(uid, targetUid, callback) {
   checkIsBlocked(uid, targetUid).then(callback);
-  const channel = supabase
-    .channel(`blocked:${uid}:${targetUid}`)
+  const channel = uniqueChannel(`blocked:${uid}:${targetUid}`)
     .on('postgres_changes', { event: '*', schema: 'public', table: 'blocked_users', filter: `user_id=eq.${uid}` },
       () => checkIsBlocked(uid, targetUid).then(callback))
     .subscribe();
@@ -195,8 +209,7 @@ export function subscribeToBlockedUsers(uid, callback) {
     callback((data || []).map(row => normalizeProfile(row.profiles) || { id: row.blocked_id, name: 'Unknown User', about: '' }));
   };
   refresh();
-  const channel = supabase
-    .channel(`blocked_users:${uid}`)
+  const channel = uniqueChannel(`blocked_users:${uid}`)
     .on('postgres_changes', { event: '*', schema: 'public', table: 'blocked_users', filter: `user_id=eq.${uid}` }, refresh)
     .subscribe();
   return () => supabase.removeChannel(channel);
@@ -210,8 +223,7 @@ export function subscribeToTyping(chatId, partnerId, callback, isGroup = false) 
     callback(!!(ms && Date.now() - ms < 4000));
   };
   supabase.from(table).select('typing').eq('id', chatId).single().then(({ data }) => evaluate(data));
-  const channel = supabase
-    .channel(`typing:${chatId}`)
+  const channel = uniqueChannel(`typing:${chatId}`)
     .on('postgres_changes', { event: 'UPDATE', schema: 'public', table, filter: `id=eq.${chatId}` },
       (payload) => evaluate(payload.new))
     .subscribe();
@@ -331,8 +343,7 @@ export function subscribeToMessages(chatId, callback) {
       callback(messages);
     });
 
-  const channel = supabase
-    .channel(`messages:${chatId}`)
+  const channel = uniqueChannel(`messages:${chatId}`)
     .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'messages', filter: `chat_id=eq.${chatId}` },
       (payload) => { messages = [...messages, normalizeMessage(payload.new)]; callback(messages); })
     .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'messages', filter: `chat_id=eq.${chatId}` },
@@ -380,8 +391,7 @@ export function subscribeToChats(uid, callback) {
     callback(normalized);
   };
   refresh();
-  const channel = supabase
-    .channel(`chats:${uid}`)
+  const channel = uniqueChannel(`chats:${uid}`)
     .on('postgres_changes', { event: '*', schema: 'public', table: 'chats' }, refresh)
     .on('postgres_changes', { event: '*', schema: 'public', table: 'chat_unread', filter: `user_id=eq.${uid}` }, refresh)
     .subscribe();
@@ -596,8 +606,7 @@ export function subscribeToHiddenChatsSettings(uid, callback) {
     hiddenChatIds: row?.hidden_chat_ids ?? [],
   });
   getHiddenChatsSettings(uid).then(callback);
-  const channel = supabase
-    .channel(`hidden_chats:${uid}`)
+  const channel = uniqueChannel(`hidden_chats:${uid}`)
     .on('postgres_changes', { event: '*', schema: 'public', table: 'hidden_chats_settings', filter: `user_id=eq.${uid}` },
       (payload) => callback(normalize(payload.new)))
     .subscribe();
@@ -642,8 +651,7 @@ export function subscribeToGroupMessages(groupId, callback) {
     .order('created_at', { ascending: false }).limit(60)
     .then(({ data }) => { messages = (data || []).reverse().map(normalizeMessage); callback(messages); });
 
-  const channel = supabase
-    .channel(`group_messages:${groupId}`)
+  const channel = uniqueChannel(`group_messages:${groupId}`)
     .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'group_messages', filter: `group_id=eq.${groupId}` },
       (payload) => { messages = [...messages, normalizeMessage(payload.new)]; callback(messages); })
     .subscribe();
@@ -675,8 +683,7 @@ export function subscribeToGroups(uid, callback) {
     callback(normalized);
   };
   refresh();
-  const channel = supabase
-    .channel(`groups:${uid}`)
+  const channel = uniqueChannel(`groups:${uid}`)
     .on('postgres_changes', { event: '*', schema: 'public', table: 'groups' }, refresh)
     .on('postgres_changes', { event: '*', schema: 'public', table: 'group_unread', filter: `user_id=eq.${uid}` }, refresh)
     .subscribe();
@@ -703,8 +710,7 @@ export function subscribeToGroup(groupId, uid, callback) {
     callback(await normalizeGroup(data, uid));
   };
   refresh();
-  const channel = supabase
-    .channel(`group:${groupId}`)
+  const channel = uniqueChannel(`group:${groupId}`)
     .on('postgres_changes', { event: '*', schema: 'public', table: 'groups', filter: `id=eq.${groupId}` }, refresh)
     .on('postgres_changes', { event: '*', schema: 'public', table: 'group_members', filter: `group_id=eq.${groupId}` }, refresh)
     .subscribe();
@@ -725,8 +731,7 @@ export function subscribeToGroupTyping(groupId, uid, callback) {
     callback(active);
   };
   supabase.from('groups').select('typing').eq('id', groupId).single().then(({ data }) => evaluate(data));
-  const channel = supabase
-    .channel(`group_typing:${groupId}`)
+  const channel = uniqueChannel(`group_typing:${groupId}`)
     .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'groups', filter: `id=eq.${groupId}` },
       (payload) => evaluate(payload.new))
     .subscribe();
@@ -825,8 +830,7 @@ export function subscribeToPresence(uid, callback) {
   };
   supabase.from('profiles').select('is_online, last_seen').eq('id', uid).single()
     .then(({ data }) => evaluate(data));
-  const channel = supabase
-    .channel(`presence:${uid}`)
+  const channel = uniqueChannel(`presence:${uid}`)
     .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'profiles', filter: `id=eq.${uid}` },
       (payload) => evaluate(payload.new))
     .subscribe();
@@ -852,8 +856,7 @@ export function subscribeToStatuses(callback) {
     callback(data || []);
   };
   refresh();
-  const channel = supabase
-    .channel('statuses')
+  const channel = uniqueChannel('statuses')
     .on('postgres_changes', { event: '*', schema: 'public', table: 'statuses' }, refresh)
     .subscribe();
   return () => supabase.removeChannel(channel);
