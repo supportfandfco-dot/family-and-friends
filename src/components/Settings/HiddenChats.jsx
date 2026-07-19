@@ -3,8 +3,10 @@
 // ═══════════════════════════════════════════════════════
 import { useState, useEffect } from 'react';
 import { useAuth } from '../../contexts/AuthContext';
-import { db, getUserById, setChatHidden } from '../../firebase';
-import { doc, setDoc, getDoc, onSnapshot } from 'firebase/firestore';
+import {
+  getUserById, setChatHidden, getChatById,
+  getHiddenChatsSettings, subscribeToHiddenChatsSettings, setHiddenChatsPin,
+} from '../../supabase';
 import { Lock, ArrowLeft, Check, AlertCircle, MessageCircle, EyeOff } from 'lucide-react';
 import toast from 'react-hot-toast';
 
@@ -80,9 +82,8 @@ function HiddenChatRow({ chatId, uid, onOpen, onUnhide }) {
     let stale = false;
     (async () => {
       try {
-        const chatSnap = await getDoc(doc(db, 'chats', chatId));
-        if (!chatSnap.exists()) return;
-        const chat = { id: chatSnap.id, ...chatSnap.data() };
+        const chat = await getChatById(chatId);
+        if (!chat) return;
         const partnerId = chat.participants?.find(p => p !== uid);
         if (!partnerId) return;
         const partner = await getUserById(partnerId);
@@ -130,13 +131,8 @@ export default function HiddenChats({ onBack, onOpenChat }) {
 
   useEffect(() => {
     if (!user) return;
-    getDoc(doc(db, 'users', user.uid, 'settings', 'hiddenChats')).then(snap => {
-      const data = snap.data();
-      if (snap.exists() && data?.pinHash) {
-        setScreen('verify');
-      } else {
-        setScreen('setup');
-      }
+    getHiddenChatsSettings(user.uid).then(({ pinHash }) => {
+      setScreen(pinHash ? 'verify' : 'setup');
     }).catch(() => setScreen('setup'));
   }, [user]);
 
@@ -145,17 +141,14 @@ export default function HiddenChats({ onBack, onOpenChat }) {
   // another tab) reflects immediately, not just on next open.
   useEffect(() => {
     if (!user || !unlocked) return;
-    return onSnapshot(doc(db, 'users', user.uid, 'settings', 'hiddenChats'), snap => {
-      setHiddenChatIds(snap.data()?.hiddenChatIds || []);
+    return subscribeToHiddenChatsSettings(user.uid, ({ hiddenChatIds }) => {
+      setHiddenChatIds(hiddenChatIds);
     });
   }, [user, unlocked]);
 
   const savePinHash = async (pin) => {
     const pinHash = await hashPin(pin);
-    await setDoc(doc(db, 'users', user.uid, 'settings', 'hiddenChats'), {
-      pinHash,
-      updatedAt: new Date().toISOString(),
-    }, { merge: true });
+    await setHiddenChatsPin(user.uid, pinHash);
   };
 
   const handleSetup = (pin) => {
@@ -177,8 +170,7 @@ export default function HiddenChats({ onBack, onOpenChat }) {
   };
 
   const handleVerify = async (pin) => {
-    const snap = await getDoc(doc(db, 'users', user.uid, 'settings', 'hiddenChats'));
-    const storedHash = snap.data()?.pinHash;
+    const { pinHash: storedHash } = await getHiddenChatsSettings(user.uid);
     const enteredHash = await hashPin(pin);
     if (enteredHash === storedHash) {
       setUnlocked(true);

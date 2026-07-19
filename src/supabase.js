@@ -180,6 +180,27 @@ export function subscribeToBlockedStatus(uid, targetUid, callback) {
 
 // Live typing status for the OTHER participant — replaces ChatWindow.jsx's
 // raw onSnapshot(doc(db,'chats',chatId)) watch of the typing map.
+// Live version of subscribeToBlockedStatus (single target) for the full
+// list — replaces Settings.jsx's raw onSnapshot(doc(db,'users',uid)) watch
+// of a `blocked` array field. The new schema models blocking as a real
+// join table instead of an array column, so this reads it via the same
+// profiles!<fk> join pattern getContacts uses.
+export function subscribeToBlockedUsers(uid, callback) {
+  const refresh = async () => {
+    const { data } = await supabase
+      .from('blocked_users')
+      .select('blocked_id, profiles!blocked_users_blocked_id_fkey(*)')
+      .eq('user_id', uid);
+    callback((data || []).map(row => normalizeProfile(row.profiles) || { id: row.blocked_id, name: 'Unknown User', about: '' }));
+  };
+  refresh();
+  const channel = supabase
+    .channel(`blocked_users:${uid}`)
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'blocked_users', filter: `user_id=eq.${uid}` }, refresh)
+    .subscribe();
+  return () => supabase.removeChannel(channel);
+}
+
 export function subscribeToTyping(chatId, partnerId, callback, isGroup = false) {
   const table = isGroup ? 'groups' : 'chats';
   const evaluate = (row) => {
@@ -231,7 +252,7 @@ export async function getOrCreateChat(uidA, uidB) {
 export async function getChatById(chatId) {
   const { data, error } = await supabase.from('chats').select('*').eq('id', chatId).single();
   if (error) return null;
-  return { ...data, participants: [data.user1_id, data.user2_id] };
+  return { ...data, participants: [data.user1_id, data.user2_id], lastMessage: data.last_message || null };
 }
 
 // Normalizes a raw messages/group_messages row into the shape the entire
@@ -553,13 +574,27 @@ export async function setChatHidden(uid, chatId, hidden) {
   });
 }
 
+export async function setHiddenChatsPin(uid, pinHash) {
+  await supabase.from('hidden_chats_settings').upsert(
+    { user_id: uid, pin_hash: pinHash, updated_at: new Date().toISOString() },
+    { onConflict: 'user_id' },
+  );
+}
+
+// One-shot read — used both for HiddenChats.jsx's initial
+// setup-vs-verify screen check and for PIN verification, and as the
+// initial value for the live subscription below.
+export async function getHiddenChatsSettings(uid) {
+  const { data } = await supabase.from('hidden_chats_settings').select('*').eq('user_id', uid).maybeSingle();
+  return { pinHash: data?.pin_hash ?? null, hiddenChatIds: data?.hidden_chat_ids ?? [] };
+}
+
 export function subscribeToHiddenChatsSettings(uid, callback) {
   const normalize = (row) => ({
     pinHash: row?.pin_hash ?? null,
     hiddenChatIds: row?.hidden_chat_ids ?? [],
   });
-  supabase.from('hidden_chats_settings').select('*').eq('user_id', uid).maybeSingle()
-    .then(({ data }) => callback(normalize(data)));
+  getHiddenChatsSettings(uid).then(callback);
   const channel = supabase
     .channel(`hidden_chats:${uid}`)
     .on('postgres_changes', { event: '*', schema: 'public', table: 'hidden_chats_settings', filter: `user_id=eq.${uid}` },

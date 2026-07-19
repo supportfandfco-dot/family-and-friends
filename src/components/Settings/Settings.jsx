@@ -15,7 +15,8 @@ import {
 } from 'lucide-react';
 import toast from 'react-hot-toast';
 import HiddenChats from './HiddenChats';
-import { db, doc, onSnapshot, unblockUser, getDoc, uploadMedia, uploadFile } from '../../firebase';
+import { unblockUser, subscribeToBlockedUsers } from '../../supabase';
+import { uploadMedia } from '../../mediaUpload';
 
 // ── Blocklist Panel ───────────────────────────────────
 function BlocklistPanel({ uid }) {
@@ -24,16 +25,9 @@ function BlocklistPanel({ uid }) {
 
   useEffect(() => {
     if (!uid) return;
-    const unsub = onSnapshot(doc(db, 'users', uid), async snap => {
-      const blocked = snap.data()?.blocked || [];
-      if (blocked.length === 0) { setBlockedUsers([]); setLoading(false); return; }
-      try {
-        const profiles = await Promise.all(blocked.map(async id => {
-          const s = await getDoc(doc(db, 'users', id));
-          return s.exists() ? { id, ...s.data() } : { id, name: 'Unknown User', about: '' };
-        }));
-        setBlockedUsers(profiles);
-      } catch { setBlockedUsers(blocked.map(id => ({ id, name: id }))); }
+    setLoading(true);
+    const unsub = subscribeToBlockedUsers(uid, (profiles) => {
+      setBlockedUsers(profiles);
       setLoading(false);
     });
     return unsub;
