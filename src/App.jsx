@@ -9,10 +9,15 @@ import { AuthProvider, useAuth } from './contexts/AuthContext';
 import { ThemeProvider } from './contexts/ThemeContext';
 import { useWebRTC } from './hooks/useWebRTC';
 import { useGroupWebRTC } from './hooks/useGroupWebRTC';
+// Calls/meetings signaling (offers/answers/ICE, ringing state) is Phase 3
+// territory — not migrated yet, being redesigned onto Supabase Realtime
+// Broadcast rather than ported as-is (see MIGRATION_NOTES.md). Everything
+// below is used ONLY by the two signaling-listener effects further down.
 import {
-  db, doc, getDoc, onSnapshot, query, collection, where, getUserById,
-  subscribeToIncomingGroupCalls, sendPushNotification, makePreview,
+  db, doc, getDoc, onSnapshot, query, collection, where,
+  subscribeToIncomingGroupCalls,
 } from './firebase';
+import { getUserById, sendPushNotification, getChatById, getGroupById } from './supabase';
 import {
   useNotifications, listenForNotificationTaps, handleLaunchUrl,
 } from './hooks/useNotifications';
@@ -191,13 +196,14 @@ function AppInner() {
 
   // ── Open chat/group by ID (used by notification routing) ─────
   const openChatById = useCallback(async (chatId) => {
-    // chatId is a direct-chat docId in format uid1_uid2 — find the partner
+    // chatId is a Supabase chats.id — find the partner via the two
+    // participant ids (getChatById synthesizes `participants` from
+    // user1_id/user2_id to match the shape this used to read off Firestore).
     if (!user) return;
     try {
-      const snap = await getDoc(doc(db, 'chats', chatId));
-      if (!snap.exists()) return;
-      const participants = snap.data().participants || [];
-      const partnerId = participants.find(id => id !== user.uid);
+      const chat = await getChatById(chatId);
+      if (!chat) return;
+      const partnerId = chat.participants.find(id => id !== user.uid);
       if (!partnerId) return;
       const partner = await getUserById(partnerId);
       if (partner) handleSelectChat(partner, chatId);
@@ -207,8 +213,8 @@ function AppInner() {
   const openGroupById = useCallback(async (groupId) => {
     if (!user) return;
     try {
-      const snap = await getDoc(doc(db, 'groups', groupId));
-      if (snap.exists()) handleSelectGroup({ id: groupId, ...snap.data() });
+      const group = await getGroupById(groupId, user.uid);
+      if (group) handleSelectGroup(group);
     } catch {}
   }, [user]);
 
@@ -238,7 +244,7 @@ function AppInner() {
     handleLaunchUrl({ onOpenChat: openChatById, onOpenGroup: openGroupById });
   }, [user?.uid]);
 
-  // ── Incoming group calls ──────────────────────────────
+  // ── Incoming group calls (signaling — deferred to Phase 3, see top-of-file note) ──
   useEffect(() => {
     if (!user) return;
     return subscribeToIncomingGroupCalls(user.uid, async (callData) => {
@@ -262,7 +268,7 @@ function AppInner() {
 
 
 
-  // ── Listen for incoming calls ─────────────────────────
+  // ── Listen for incoming calls (signaling — deferred to Phase 3) ──────
   useEffect(() => {
     if (!user) return;
     const q = query(

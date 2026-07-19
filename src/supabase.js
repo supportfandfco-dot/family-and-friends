@@ -222,6 +222,18 @@ export async function getOrCreateChat(uidA, uidB) {
   return data.id;
 }
 
+// One-shot chat lookup by id — used for notification-tap deep-linking
+// (App.jsx's openChatById), which only needs the participant ids to
+// resolve the partner profile. Returns null instead of throwing so a
+// stale/deleted chatId from a notification payload doesn't crash the
+// tap handler. `participants` is synthesized to match the shape the
+// caller expects (Firestore's chats docs stored it as a real array).
+export async function getChatById(chatId) {
+  const { data, error } = await supabase.from('chats').select('*').eq('id', chatId).single();
+  if (error) return null;
+  return { ...data, participants: [data.user1_id, data.user2_id] };
+}
+
 // Normalizes a raw messages/group_messages row into the shape the entire
 // existing app expects — senderId, timestamp, fileName, editedAt (all
 // camelCase) instead of Postgres's sender_id/created_at/file_name/
@@ -625,6 +637,14 @@ export function subscribeToGroups(uid, callback) {
     .on('postgres_changes', { event: '*', schema: 'public', table: 'group_unread', filter: `user_id=eq.${uid}` }, refresh)
     .subscribe();
   return () => supabase.removeChannel(channel);
+}
+
+// One-shot group lookup by id, normalized the same way subscribeToGroups
+// does — used for notification-tap deep-linking (App.jsx's openGroupById).
+export async function getGroupById(groupId, uid) {
+  const { data, error } = await supabase.from('groups').select('*').eq('id', groupId).single();
+  if (error) return null;
+  return normalizeGroup(data, uid);
 }
 
 // ── Presence ─────────────────────────────────────────────────
