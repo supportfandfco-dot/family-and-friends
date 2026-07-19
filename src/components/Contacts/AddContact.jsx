@@ -2,19 +2,29 @@
 //  AddContact — Search by Name or 6-digit Code
 //  Family & Friends  ·  Built by Ishrit Sachdeva
 // ═══════════════════════════════════════════════════════
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useEffect } from 'react';
 import { useAuth } from '../../contexts/AuthContext';
-import { searchUsersByName, getUserByCode, createOrUpdateUser } from '../../firebase';
+import { searchUsersByName, getUserByCode, addContact, getContacts } from '../../supabase';
 import toast from 'react-hot-toast';
 import { Search, X, UserPlus, Check, ArrowLeft, Hash } from 'lucide-react';
 
 export default function AddContact({ onClose, onContactAdded }) {
-  const { user, profile, updateProfile } = useAuth();
-  const [query,    setQuery]    = useState('');
-  const [mode,     setMode]     = useState('name');   // 'name' | 'code'
-  const [results,  setResults]  = useState([]);
-  const [loading,  setLoading]  = useState(false);
-  const [added,    setAdded]    = useState({});
+  const { user } = useAuth();
+  const [query,      setQuery]      = useState('');
+  const [mode,       setMode]       = useState('name');   // 'name' | 'code'
+  const [results,    setResults]    = useState([]);
+  const [loading,    setLoading]    = useState(false);
+  const [added,      setAdded]      = useState({});
+  // Own contact ids, loaded once — the new schema models contacts as a
+  // join table (see addContact/getContacts in supabase.js), not an array
+  // field on the profile, so it can't be read off `profile.contacts`
+  // anymore.
+  const [contactIds, setContactIds] = useState(new Set());
+
+  useEffect(() => {
+    if (!user?.uid) return;
+    getContacts(user.uid).then(contacts => setContactIds(new Set(contacts.map(c => c.id))));
+  }, [user?.uid]);
 
   const handleSearch = useCallback(async (val) => {
     setQuery(val);
@@ -52,23 +62,18 @@ export default function AddContact({ onClose, onContactAdded }) {
 
   const handleAdd = async (contact) => {
     try {
-      const existing = profile?.contacts || [];
-      if (existing.includes(contact.id)) { toast('Already in contacts'); return; }
-      await updateProfile({ contacts: [...existing, contact.id] });
-      const theirContacts = contact.contacts || [];
-      if (!theirContacts.includes(user.uid)) {
-        await createOrUpdateUser(contact.id, { contacts: [...theirContacts, user.uid] });
-      }
+      if (contactIds.has(contact.id)) { toast('Already in contacts'); return; }
+      await addContact(user.uid, contact.id);
+      setContactIds(prev => new Set(prev).add(contact.id));
       setAdded(prev => ({ ...prev, [contact.id]: true }));
       toast.success(`${contact.name} added to contacts!`);
       if (onContactAdded) onContactAdded(contact);
     } catch (e) {
-      // Silent — toast already shown
       toast.error('Failed to add contact');
     }
   };
 
-  const isContact = (id) => (profile?.contacts || []).includes(id) || added[id];
+  const isContact = (id) => contactIds.has(id) || added[id];
 
   return (
     <div className="flex flex-col h-full bg-[var(--sidebar-bg)]">
