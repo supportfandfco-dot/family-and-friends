@@ -8,11 +8,10 @@
 //    - Firestore writes batched: read once, write once per flush
 // ═══════════════════════════════════════════════════════════════
 import { useEffect, useRef } from 'react';
-import { db, createFFTask } from '../firebase';
 import {
-  doc, getDoc, setDoc,
-  collection, query, where, orderBy, limit, getDocs, onSnapshot,
-} from 'firebase/firestore';
+  createTask, getCommandCenterData, mergeCommandCenterData,
+  getRecentMessages, subscribeToIntelligenceFeed,
+} from '../supabase';
 import { askDeep } from '../ai/groqClient';
 import { toMs } from '../utils/timestamp';
 
@@ -174,16 +173,11 @@ export function useIntelligenceEngine(uid) {
   const checkUnansweredQuestion = async ({ msgId, content, senderId, senderName, timestamp, chatId, sourceName, chatType }) => {
     if (senderId === uid || !looksLikeQuestion(content)) return;
 
-    const msgsCol = chatType === 'group'
-      ? collection(db, 'groups', chatId, 'messages')
-      : collection(db, 'chats', chatId, 'messages');
-
     const msgTs = toMs(timestamp);
     try {
       stats.current.firestoreReads++;
-      const recent = await getDocs(query(msgsCol, orderBy('timestamp', 'desc'), limit(10)));
-      const msgs = recent.docs.map(d => d.data());
-      const userRepliedAfter = msgs.some(m => m.senderId === uid && toMs(m.timestamp) > msgTs);
+      const recent = await getRecentMessages(chatId, chatType === 'group', 10);
+      const userRepliedAfter = recent.some(m => m.senderId === uid && toMs(m.timestamp) > msgTs);
 
       if (!userRepliedAfter) {
         await saveWaitingItem({ uid, chatId, chatType, sourceName, senderName, text: content, timestamp, msgId });
@@ -297,18 +291,16 @@ export function useIntelligenceEngine(uid) {
       markProcessed(`${m.chatId}-${m.msgId}`);
     });
 
-    // Tasks: write individually (no choice, subcollection)
+    // Tasks: write individually (no choice, one row per task)
     for (const t of newTasks) {
-      await createFFTask(t).catch(() => {});
+      await createTask(uid, t).catch(() => {});
     }
 
     // CommandCenter: single read + single write
     if (needsWrite && (newCommits.length || newDecs.length || newTimeline.length)) {
       try {
         stats.current.firestoreReads++;
-        const ccRef = doc(db, 'users', uid, 'commandCenter', 'data');
-        const snap = await getDoc(ccRef);
-        const existing = snap.exists() ? snap.data() : {};
+        const existing = await getCommandCenterData(uid);
 
         const dedup = (arr) => {
           const seen = new Set();
@@ -320,16 +312,13 @@ export function useIntelligenceEngine(uid) {
           });
         };
 
-        const merged = {
+        stats.current.firestoreWrites++;
+        await mergeCommandCenterData(uid, {
           commitments: dedup([...newCommits, ...(existing.commitments || [])]).slice(0, 15),
           decisions:   dedup([...newDecs,    ...(existing.decisions   || [])]).slice(0, 15),
           timeline:    dedup([...newTimeline, ...(existing.timeline   || [])])
             .sort((a, b) => b.ts - a.ts).slice(0, 20),
-          lastUpdated: Date.now(),
-        };
-
-        stats.current.firestoreWrites++;
-        await setDoc(ccRef, merged, { merge: true });
+        });
       } catch {}
     }
 
@@ -388,66 +377,52 @@ export function useIntelligenceEngine(uid) {
     }
   };
 
-  // ── Firestore subscriptions ───────────────────────────────────
+  // ── Realtime feed of last-message updates ──────────────────────
   useEffect(() => {
     if (!uid) return;
 
-    const unsubChats = onSnapshot(
-      query(collection(db, 'chats'), where('participants', 'array-contains', uid)),
-      snap => {
-        snap.docChanges().forEach(change => {
-          if (change.type !== 'modified' && change.type !== 'added') return;
-          const chat = change.doc.data();
-          const lm = chat.lastMessage;
-          if (!lm) return;
-          // Stable msgId: prefer explicit id, then timestamp seconds, then content hash
-          // Never use Date.now() — it changes every snapshot and breaks deduplication
-          const stableId = lm.id || lm.messageId ||
-            (lm.timestamp?.seconds ? String(lm.timestamp.seconds) : null) ||
-            String(Math.abs((lm.content || '').split('').reduce((h, c) => (Math.imul(31, h) + c.charCodeAt(0)) | 0, 0)));
-          ingestMessage({
-            msgId: stableId,
-            content: lm.content || lm.text || '',
-            senderId: lm.senderId,
-            senderName: lm.senderName || 'Contact',
-            timestamp: lm.timestamp,
-            chatId: change.doc.id,
-            sourceName: chat.name || 'Direct Chat',
-            chatType: 'direct',
-          });
-        });
-      }
-    );
+    // Stable msgId: prefer explicit id, then a parsed timestamp, then a
+    // content hash. Never Date.now() — it changes every payload and
+    // breaks deduplication.
+    const stableId = (lm) => lm.id || lm.messageId ||
+      (lm.timestamp ? String(new Date(lm.timestamp).getTime()) : null) ||
+      String(Math.abs((lm.content || '').split('').reduce((h, c) => (Math.imul(31, h) + c.charCodeAt(0)) | 0, 0)));
 
-    const unsubGroups = onSnapshot(
-      query(collection(db, 'groups'), where('members', 'array-contains', uid)),
-      snap => {
-        snap.docChanges().forEach(change => {
-          if (change.type !== 'modified' && change.type !== 'added') return;
-          const group = change.doc.data();
-          const lm = group.lastMessage;
-          if (!lm || lm.type === 'system') return;
-          const stableId = lm.id || lm.messageId ||
-            (lm.timestamp?.seconds ? String(lm.timestamp.seconds) : null) ||
-            String(Math.abs((lm.content || '').split('').reduce((h, c) => (Math.imul(31, h) + c.charCodeAt(0)) | 0, 0)));
-          ingestMessage({
-            msgId: stableId,
-            content: lm.content || lm.text || '',
-            senderId: lm.senderId,
-            senderName: lm.senderName || 'Member',
-            timestamp: lm.timestamp,
-            chatId: change.doc.id,
-            sourceName: group.name || 'Group',
-            chatType: 'group',
-          });
+    const unsub = subscribeToIntelligenceFeed(
+      uid,
+      (chatRow) => {
+        const lm = chatRow.last_message;
+        if (!lm) return;
+        ingestMessage({
+          msgId: stableId(lm),
+          content: lm.content || lm.text || '',
+          senderId: lm.senderId,
+          senderName: lm.senderName || 'Contact',
+          timestamp: lm.timestamp,
+          chatId: chatRow.id,
+          sourceName: 'Direct Chat',
+          chatType: 'direct',
+        });
+      },
+      (groupRow) => {
+        const lm = groupRow.last_message;
+        if (!lm || lm.type === 'system') return;
+        ingestMessage({
+          msgId: stableId(lm),
+          content: lm.content || lm.text || '',
+          senderId: lm.senderId,
+          senderName: lm.senderName || 'Member',
+          timestamp: lm.timestamp,
+          chatId: groupRow.id,
+          sourceName: groupRow.name || 'Group',
+          chatType: 'group',
         });
       }
     );
 
     return () => {
       clearTimeout(batchTimer.current);
-      unsubChats();
-      unsubGroups();
+      unsub();
     };
   }, [uid]);
 }
@@ -457,9 +432,7 @@ export function useIntelligenceEngine(uid) {
 async function saveWaitingItem({ uid, chatId, chatType, sourceName, senderName, text, timestamp, msgId }) {
   if (!uid || !chatId) return;
   try {
-    const ccRef = doc(db, 'users', uid, 'commandCenter', 'data');
-    const snap = await getDoc(ccRef);
-    const existing = snap.exists() ? snap.data() : {};
+    const existing = await getCommandCenterData(uid);
     // Dedup: one entry per chatId — newer replaces older
     const prev = (existing.waitingFor || []).filter(w => w.chatId !== chatId);
     const entry = {
@@ -471,11 +444,7 @@ async function saveWaitingItem({ uid, chatId, chatType, sourceName, senderName, 
       ts: toMs(timestamp) || Date.now(),
       msgId: msgId || '',
     };
-    // Use setDoc with merge to be atomic — never addDoc which could duplicate
-    await setDoc(ccRef, {
-      waitingFor: [entry, ...prev].slice(0, 10),
-      lastUpdated: Date.now(),
-    }, { merge: true });
+    await mergeCommandCenterData(uid, { waitingFor: [entry, ...prev].slice(0, 10) });
   } catch {
     // Silent — intelligence writes never crash the app
   }

@@ -5,11 +5,13 @@ import {
   Clock, CheckCircle2, ChevronRight, AlertCircle, CalendarPlus, X
 } from 'lucide-react';
 import toast from 'react-hot-toast';
-import { 
-  auth, db, createFFTask, toggleFFTask, deleteFFTask, subscribeToFFTasks, 
-  googleCachedAccessToken, signInWithGoogle 
-} from '../../firebase';
-import { doc, updateDoc } from 'firebase/firestore';
+import {
+  createTask, toggleTask, deleteTask, subscribeToTasks, setTaskGoogleId,
+} from '../../supabase';
+// Google Tasks sync is a separate external OAuth flow (grabs a Google
+// `tasks`-scope access token via a Firebase popup) — unrelated to the
+// Firestore/Supabase data-layer migration, so it stays as-is here.
+import { googleCachedAccessToken, signInWithGoogle } from '../../firebase';
 import { generateCommandCenterInsights } from '../../ai/unifyService';
 
 export default function TasksTab({ chats, groups, user, onSelectChat, onSelectGroup }) {
@@ -21,7 +23,7 @@ export default function TasksTab({ chats, groups, user, onSelectChat, onSelectGr
 
   useEffect(() => {
     if (!user?.uid) return;
-    const unsub = subscribeToFFTasks(user.uid, (data) => {
+    const unsub = subscribeToTasks(user.uid, (data) => {
       setTasks(data);
     });
     return () => unsub();
@@ -56,7 +58,7 @@ export default function TasksTab({ chats, groups, user, onSelectChat, onSelectGr
     // Opt update for feel
     setTasks(prev => prev.map(t => t.id === task.id ? { ...t, status: isCompleted ? 'pending' : 'completed' } : t));
     try {
-      await toggleFFTask(task.id, isCompleted ? 'pending' : 'completed');
+      await toggleTask(task.id, isCompleted ? 'pending' : 'completed');
     } catch (e) {
       toast.error('Failed to update task');
     }
@@ -66,7 +68,7 @@ export default function TasksTab({ chats, groups, user, onSelectChat, onSelectGr
     e.preventDefault();
     if (!newTaskTitle.trim()) return;
     try {
-      await createFFTask({ title: newTaskTitle, source: 'App Task List', dueDate: null });
+      await createTask(user.uid, { title: newTaskTitle, source: 'App Task List', dueDate: null });
       setNewTaskTitle('');
     } catch (e) {
       toast.error('Failed to add task');
@@ -108,9 +110,7 @@ export default function TasksTab({ chats, groups, user, onSelectChat, onSelectGr
       const gData = await res.json();
       
       // Update local task with googleTaskId
-      await updateDoc(doc(db, 'users', user.uid, 'tasks', task.id), {
-        googleTaskId: gData.id
-      });
+      await setTaskGoogleId(task.id, gData.id);
       
       toast.success('Added to Google Tasks');
     } catch (err) {
@@ -121,7 +121,7 @@ export default function TasksTab({ chats, groups, user, onSelectChat, onSelectGr
 
   const acceptSuggestion = async (s) => {
     try {
-      await createFFTask({ title: s.title, dueDate: s.dueDate || null, source: s.source || 'AI Suggestion' });
+      await createTask(user.uid, { title: s.title, dueDate: s.dueDate || null, source: s.source || 'AI Suggestion' });
       setAiSuggestions(prev => prev.filter(x => x.title !== s.title));
       toast.success("Task added");
     } catch (e) {
@@ -227,7 +227,7 @@ export default function TasksTab({ chats, groups, user, onSelectChat, onSelectGr
                   key={task.id} 
                   task={task} 
                   onToggle={() => handleToggleTask(task)} 
-                  onDelete={() => deleteFFTask(task.id)}
+                  onDelete={() => deleteTask(task.id)}
                   onSyncGoogle={() => syncToGoogle(task)}
                   onNavigate={() => navigateToSource(task.source)}
                 />
@@ -250,7 +250,7 @@ export default function TasksTab({ chats, groups, user, onSelectChat, onSelectGr
                       key={task.id} 
                       task={task} 
                       onToggle={() => handleToggleTask(task)} 
-                      onDelete={() => deleteFFTask(task.id)}
+                      onDelete={() => deleteTask(task.id)}
                       onSyncGoogle={() => syncToGoogle(task)}
                       onNavigate={() => navigateToSource(task.source)}
                     />

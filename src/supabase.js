@@ -869,3 +869,150 @@ export async function markStatusViewed(statusId, viewerId) {
 export async function deleteStatus(statusId) {
   await supabase.from('statuses').delete().eq('id', statusId);
 }
+
+// ── FF Tasks (auto-extracted + manual) ─────────────────────────
+// Replaces the old `users/{uid}/tasks` Firestore subcollection with a
+// real `tasks` table. Requires a `tasks` table + RLS policy — see
+// tasks_and_command_center.sql.
+function normalizeTask(row) {
+  return {
+    id: row.id,
+    title: row.title,
+    source: row.source,
+    chatId: row.chat_id,
+    type: row.chat_type,
+    messageId: row.message_id,
+    senderId: row.sender_id,
+    confidenceScore: row.confidence_score,
+    confidenceLabel: row.confidence_label,
+    status: row.status,
+    dueDate: row.due_date,
+    googleTaskId: row.google_task_id,
+    messageText: row.message_text,
+    createdAt: row.created_at,
+  };
+}
+
+export async function createTask(uid, taskData) {
+  // Dedup: if a messageId is provided (auto-extracted tasks), skip if a
+  // task for that message already exists — same behavior as the old
+  // Firestore version's pre-write query.
+  if (taskData.messageId) {
+    const { data: existing } = await supabase.from('tasks')
+      .select('id').eq('user_id', uid).eq('message_id', taskData.messageId).maybeSingle();
+    if (existing) return existing.id;
+  }
+  const { data, error } = await supabase.from('tasks').insert({
+    user_id: uid,
+    title: taskData.title,
+    source: taskData.source || null,
+    chat_id: taskData.chatId || null,
+    chat_type: taskData.type || taskData.chatType || null,
+    message_id: taskData.messageId || null,
+    sender_id: taskData.senderId || null,
+    confidence_score: taskData.confidenceScore ?? null,
+    confidence_label: taskData.confidenceLabel || null,
+    due_date: taskData.dueDate || null,
+  }).select('id').single();
+  if (error) throw error;
+  return data.id;
+}
+
+export async function toggleTask(taskId, newStatus) {
+  await supabase.from('tasks').update({ status: newStatus }).eq('id', taskId);
+}
+
+export async function deleteTask(taskId) {
+  await supabase.from('tasks').delete().eq('id', taskId);
+}
+
+export async function setTaskGoogleId(taskId, googleTaskId) {
+  await supabase.from('tasks').update({ google_task_id: googleTaskId }).eq('id', taskId);
+}
+
+export function subscribeToTasks(uid, callback) {
+  const refresh = async () => {
+    const { data } = await supabase.from('tasks').select('*').eq('user_id', uid).order('created_at', { ascending: false });
+    callback((data || []).map(normalizeTask));
+  };
+  refresh();
+  const channel = uniqueChannel(`tasks:${uid}`)
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'tasks', filter: `user_id=eq.${uid}` }, refresh)
+    .subscribe();
+  return () => supabase.removeChannel(channel);
+}
+
+// ── Command Center (aggregated commitments/decisions/timeline/waitingFor) ──
+// Replaces the old `users/{uid}/commandCenter/data` Firestore doc with a
+// one-row-per-user `command_center` table. Requires a `command_center`
+// table + RLS policy — see tasks_and_command_center.sql.
+function normalizeCommandCenter(row) {
+  return {
+    commitments: row?.commitments || [],
+    decisions: row?.decisions || [],
+    timeline: row?.timeline || [],
+    waitingFor: row?.waiting_for || [],
+    lastUpdated: row?.last_updated ? new Date(row.last_updated).getTime() : null,
+  };
+}
+
+export async function getCommandCenterData(uid) {
+  const { data } = await supabase.from('command_center').select('*').eq('user_id', uid).maybeSingle();
+  return normalizeCommandCenter(data);
+}
+
+export function subscribeToCommandCenter(uid, callback) {
+  getCommandCenterData(uid).then(callback);
+  const channel = uniqueChannel(`command_center:${uid}`)
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'command_center', filter: `user_id=eq.${uid}` },
+      (payload) => callback(normalizeCommandCenter(payload.new)))
+    .subscribe();
+  return () => supabase.removeChannel(channel);
+}
+
+// Read-merge-write, mirroring the old Firestore setDoc({...}, {merge:true})
+// pattern the intelligence engine relied on — commitments/decisions/
+// timeline/waitingFor are deduped+capped client-side by the caller before
+// this is called, so this just persists whatever patch it's given.
+// `patch` keys are camelCase (matching the rest of the app); mapped to
+// snake_case columns here so callers don't need to know column names.
+const CC_FIELD_MAP = { waitingFor: 'waiting_for' };
+export async function mergeCommandCenterData(uid, patch) {
+  const { data: existing } = await supabase.from('command_center').select('*').eq('user_id', uid).maybeSingle();
+  const row = { user_id: uid, ...(existing || {}) };
+  for (const [key, value] of Object.entries(patch)) {
+    row[CC_FIELD_MAP[key] || key] = value;
+  }
+  row.last_updated = new Date().toISOString();
+  await supabase.from('command_center').upsert(row, { onConflict: 'user_id' });
+}
+
+// One-shot recent-messages read for a chat/group — replaces
+// useIntelligenceEngine.js's raw getDocs(query(chats/{id}/messages, ...))
+// against the old per-chat message subcollections, now that messages live
+// in the top-level `messages`/`group_messages` tables.
+export async function getRecentMessages(chatId, isGroup, limitN = 10) {
+  const table = isGroup ? 'group_messages' : 'messages';
+  const col = isGroup ? 'group_id' : 'chat_id';
+  const { data } = await supabase.from(table).select('*').eq(col, chatId)
+    .order('created_at', { ascending: false }).limit(limitN);
+  return (data || []).map(normalizeMessage);
+}
+
+// Realtime feed of chats/groups last_message updates, for the
+// intelligence engine (task/commitment/decision extraction) — replaces
+// useIntelligenceEngine.js's two Firestore onSnapshot listeners on
+// `chats`/`groups` filtered by array-contains(uid). No explicit uid
+// filter is needed here: RLS already restricts which rows a client can
+// see to ones they participate in (same trust model subscribeToChats/
+// subscribeToGroups already rely on), so every row reaching the
+// callback is guaranteed to be one the current user can see.
+export function subscribeToIntelligenceFeed(uid, onChatUpdate, onGroupUpdate) {
+  const channel = uniqueChannel(`intel_feed:${uid}`)
+    .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'chats' },
+      (payload) => onChatUpdate(payload.new))
+    .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'groups' },
+      (payload) => onGroupUpdate(payload.new))
+    .subscribe();
+  return () => supabase.removeChannel(channel);
+}

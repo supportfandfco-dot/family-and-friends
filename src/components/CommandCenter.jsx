@@ -9,13 +9,10 @@ import {
   ArrowRight, RefreshCw,
 } from 'lucide-react';
 import {
-  db, auth, getUserById,
-} from '../firebase';
-import {
-  doc, onSnapshot, getDoc, collection, query,
-  where, orderBy, limit, getDocs,
-} from 'firebase/firestore';
+  getUserById, getGroupById, subscribeToCommandCenter,
+} from '../supabase';
 import TasksDashboard from './CommandCenter/TasksDashboard';
+import { toMs } from '../utils/timestamp';
 
 
 // ── Confidence badge ──────────────────────────────────────────
@@ -35,12 +32,6 @@ function ConfBadge({ label }) {
 }
 
 // ── helpers ───────────────────────────────────────────────────
-function toMs(ts) {
-  if (!ts) return 0;
-  if (ts.seconds) return ts.seconds * 1000;
-  return Number(ts);
-}
-
 function relLabel(ms) {
   if (!ms) return '';
   const diff = Date.now() - ms;
@@ -122,46 +113,29 @@ export default function CommandCenter({ chats, groups, user, onSelectChat, onSel
   const [ccData, setCcData]       = useState(null);
   const [ccLoading, setCcLoading] = useState(true);
 
-  // User's lastSeen from Firestore (for "while you were away")
+  // User's lastSeen (for "while you were away")
   const [lastSeenMs, setLastSeenMs] = useState(null);
 
-  // Derived from props (fully local, no Firestore needed)
+  // Derived from props (fully local, no extra fetch needed)
   const [awayUpdates, setAwayUpdates] = useState([]);
   const [waitingForMe, setWaitingForMe] = useState([]);
 
-  // ── subscribe to commandCenter doc ──────────────────────────
+  // ── subscribe to command center data ────────────────────────
   useEffect(() => {
     if (!uid) return;
-    const ref = doc(db, 'users', uid, 'commandCenter', 'data');
-
-    // Safety timeout — if Firestore doesn't respond in 8s, unblock UI
+    // Safety timeout — if the initial fetch hangs, unblock the UI anyway
     const timeout = setTimeout(() => setCcLoading(false), 8000);
-
-    const unsub = onSnapshot(ref,
-      snap => {
-        clearTimeout(timeout);
-        setCcData(snap.exists() ? snap.data() : {});
-        setCcLoading(false);
-      },
-      (err) => {
-        // Permission error or network error — unblock UI with empty data
-        clearTimeout(timeout);
-        // Firestore error (permission/network) — UI unblocked with empty data
-        setCcData({});
-        setCcLoading(false);
-      }
-    );
+    const unsub = subscribeToCommandCenter(uid, (data) => {
+      clearTimeout(timeout);
+      setCcData(data);
+      setCcLoading(false);
+    });
     return () => { clearTimeout(timeout); unsub(); };
   }, [uid]);
-
-  // ── fetch user's lastSeen once ────────────────────────────────
   useEffect(() => {
     if (!uid) return;
-    getDoc(doc(db, 'users', uid)).then(snap => {
-      if (snap.exists()) {
-        const ls = snap.data().lastSeen;
-        setLastSeenMs(toMs(ls));
-      }
+    getUserById(uid).then(profile => {
+      if (profile?.lastSeen) setLastSeenMs(toMs(profile.lastSeen));
     }).catch(() => {});
   }, [uid]);
 
@@ -185,8 +159,8 @@ export default function CommandCenter({ chats, groups, user, onSelectChat, onSel
       const g = (groups || []).find(g => g.id === id);
       if (g) { onSelectGroup(g); return; }
       try {
-        const snap = await getDoc(doc(db, 'groups', id));
-        if (snap.exists()) onSelectGroup({ id: snap.id, ...snap.data() });
+        const g = await getGroupById(id, uid);
+        if (g) onSelectGroup(g);
       } catch {}
     } else {
       const chatDoc = (chats || []).find(c => c.id === id);
@@ -196,7 +170,6 @@ export default function CommandCenter({ chats, groups, user, onSelectChat, onSel
         || id.split('_').find(p => p !== uid);
       if (!partnerId) return;
       try {
-        const { getUserById } = await import('../firebase');
         const partner = await getUserById(partnerId);
         if (partner) onSelectChat(partner, id);
       } catch {
@@ -212,9 +185,9 @@ export default function CommandCenter({ chats, groups, user, onSelectChat, onSel
       <div className="p-8 flex flex-col items-center justify-center animate-fade-in text-center mt-10">
         <Zap className="animate-pulse text-brand-500 mb-4" size={32} />
         <h3 className="font-semibold text-[var(--text-primary)]">Loading Command Center</h3>
-        <p className="text-sm text-[var(--text-secondary)] mt-2">Connecting to Firestore…</p>
+        <p className="text-sm text-[var(--text-secondary)] mt-2">Connecting…</p>
         <p className="text-xs text-[var(--text-secondary)] mt-1 opacity-60">
-          If this takes too long, check your Firestore rules are published.
+          If this takes too long, check your Supabase connection.
         </p>
       </div>
     );
