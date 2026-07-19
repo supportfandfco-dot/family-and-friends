@@ -366,7 +366,15 @@ export function subscribeToChats(uid, callback) {
   return () => supabase.removeChannel(channel);
 }
 
-export async function markMessagesRead(chatId, uid) {
+export async function markMessagesRead(chatId, uid, isGroup = false) {
+  if (isGroup) {
+    await supabase.from('group_unread').update({ count: 0 }).eq('group_id', chatId).eq('user_id', uid);
+    // seenBy-per-message tracking isn't modeled as a column in the new
+    // schema yet (group_messages has no equivalent of Firestore's seenBy
+    // array) — read receipts stop at the unread-count level for groups
+    // for now, same functional gap as direct chats had before `status`.
+    return;
+  }
   await supabase.from('chat_unread').update({ count: 0 }).eq('chat_id', chatId).eq('user_id', uid);
   // Mark other participants' messages as seen — mirrors the old
   // Firestore version's batch update, just as a plain SQL UPDATE here.
@@ -645,6 +653,91 @@ export async function getGroupById(groupId, uid) {
   const { data, error } = await supabase.from('groups').select('*').eq('id', groupId).single();
   if (error) return null;
   return normalizeGroup(data, uid);
+}
+
+// Live single-group subscription — replaces GroupChat.jsx's raw
+// onSnapshot(doc(db,'groups',groupId)) watch used to keep the member list
+// current and detect the group being deleted or the current user being
+// removed. Calls callback(null) when the group no longer exists, matching
+// Firestore's snap.exists() check so the caller can navigate back.
+export function subscribeToGroup(groupId, uid, callback) {
+  const refresh = async () => {
+    const { data } = await supabase.from('groups').select('*').eq('id', groupId).single();
+    if (!data) { callback(null); return; }
+    callback(await normalizeGroup(data, uid));
+  };
+  refresh();
+  const channel = supabase
+    .channel(`group:${groupId}`)
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'groups', filter: `id=eq.${groupId}` }, refresh)
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'group_members', filter: `group_id=eq.${groupId}` }, refresh)
+    .subscribe();
+  return () => supabase.removeChannel(channel);
+}
+
+// Live "who's typing" for a group, excluding self — replaces GroupChat.jsx's
+// second raw onSnapshot(doc(db,'groups',groupId)) watch of the typing map.
+// Returns the currently-typing member uids; the caller already maps
+// uid -> display name via its own memberProfiles state.
+export function subscribeToGroupTyping(groupId, uid, callback) {
+  const evaluate = (row) => {
+    const typing = row?.typing || {};
+    const now = Date.now();
+    const active = Object.entries(typing)
+      .filter(([id, ts]) => id !== uid && ts && now - new Date(ts).getTime() < 4000)
+      .map(([id]) => id);
+    callback(active);
+  };
+  supabase.from('groups').select('typing').eq('id', groupId).single().then(({ data }) => evaluate(data));
+  const channel = supabase
+    .channel(`group_typing:${groupId}`)
+    .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'groups', filter: `id=eq.${groupId}` },
+      (payload) => evaluate(payload.new))
+    .subscribe();
+  return () => supabase.removeChannel(channel);
+}
+
+export async function updateGroupDescription(groupId, description) {
+  await supabase.from('groups').update({ description }).eq('id', groupId);
+}
+
+// System messages use sender_id: null rather than the string 'system' —
+// group_messages.sender_id is a real FK into profiles, and GroupMsgBubble
+// already keys off `type === 'system'` for rendering, not senderId, so
+// null is safe and avoids a bogus FK value.
+async function postGroupSystemMessage(groupId, content) {
+  await supabase.from('group_messages').insert({
+    group_id: groupId, sender_id: null, sender_name: 'System', content, type: 'system',
+  });
+  await supabase.from('groups').update({
+    last_message: { content, type: 'system', senderId: 'system', timestamp: new Date().toISOString() },
+  }).eq('id', groupId);
+}
+
+export async function addGroupMember(groupId, newMemberId, adminName, newMemberName) {
+  try {
+    await supabase.from('group_members').insert({ group_id: groupId, user_id: newMemberId });
+    await supabase.from('group_unread').insert({ group_id: groupId, user_id: newMemberId, count: 0 });
+    await postGroupSystemMessage(groupId, `${newMemberName} was added by ${adminName}`);
+  } catch {}
+}
+
+export async function removeGroupMember(groupId, memberId, adminId, adminName, memberName) {
+  try {
+    await supabase.from('group_members').delete().eq('group_id', groupId).eq('user_id', memberId);
+    await supabase.from('group_unread').delete().eq('group_id', groupId).eq('user_id', memberId);
+    await postGroupSystemMessage(groupId, `${memberName} was removed by ${adminName}`);
+  } catch {}
+}
+
+export async function exitGroupWithNotice(groupId, uid, userName, isAdmin = false, deleteForAll = false) {
+  if (deleteForAll && isAdmin) {
+    await supabase.from('groups').delete().eq('id', groupId);
+    return;
+  }
+  await supabase.from('group_members').delete().eq('group_id', groupId).eq('user_id', uid);
+  await supabase.from('group_unread').delete().eq('group_id', groupId).eq('user_id', uid);
+  await postGroupSystemMessage(groupId, `${userName} left the group`);
 }
 
 // ── Presence ─────────────────────────────────────────────────

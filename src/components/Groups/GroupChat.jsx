@@ -6,14 +6,16 @@ import { useState, useEffect, useRef, useMemo, useCallback, memo } from 'react';
 import { useAuth } from '../../contexts/AuthContext';
 import { useTheme } from '../../contexts/ThemeContext';
 import {
-  db, createGroup, sendGroupMessage, subscribeToGroupMessages, subscribeToGroups,
+  createGroup, sendGroupMessage, subscribeToGroupMessages, subscribeToGroups,
+  subscribeToGroup, subscribeToGroupTyping,
   setTyping, clearTyping, markMessagesRead,
   deleteMessageForMe, deleteMessageForEveryone, deleteMultipleMessages,
   editMessage, forwardMessage, clearChat, exitGroupWithNotice,
   removeGroupMember, addGroupMember, updateGroupDescription,
-  getUserById, addReaction, sendPushNotification, makePreview,
-  doc, onSnapshot, updateDoc, serverTimestamp, uploadMedia
-} from '../../firebase';
+  getUserById, addReaction, sendPushNotification,
+} from '../../supabase';
+import { makePreview } from '../../utils/messagePreview';
+import { uploadMedia } from '../../mediaUpload';
 import {
   ArrowLeft, Users, MoreVertical, Send, Mic, Paperclip,
   Image, Plus, X, Check, Crown, Camera, Search, Smile,
@@ -702,14 +704,13 @@ export function GroupChatWindow({ group: initialGroup, onBack, contacts: propCon
     return subscribeToGroups(user.uid, setOwnGroups);
   }, [user?.uid]);
 
-  // Live-subscribe to the group document so member list updates in real-time
+  // Live-subscribe to the group so member list updates in real-time
   useEffect(() => {
-    if (!initialGroup?.id) return;
-    const unsub = onSnapshot(doc(db, 'groups', initialGroup.id), snap => {
-      if (!snap.exists()) { onBack?.(); return; }
-      const data = { id: snap.id, ...snap.data() };
+    if (!initialGroup?.id || !user?.uid) return;
+    const unsub = subscribeToGroup(initialGroup.id, user.uid, (data) => {
+      if (!data) { onBack?.(); return; }
       setGroup(data);
-      if (user?.uid && !(data.members || []).includes(user.uid)) {
+      if (!(data.members || []).includes(user.uid)) {
         toast('You were removed from this group', { icon: '👋' });
         onBack?.();
       }
@@ -887,13 +888,8 @@ export function GroupChatWindow({ group: initialGroup, onBack, contacts: propCon
   // Typing
   useEffect(() => {
     if (!group) return;
-    const unsub = onSnapshot(doc(db, 'groups', group.id), snap => {
-      const typing = snap.data()?.typing || {};
-      const now = Date.now();
-      const active = Object.entries(typing)
-        .filter(([uid, ts]) => uid !== user.uid && ts && now - (ts?.seconds ? ts.seconds*1000 : ts) < 4000)
-        .map(([uid]) => memberProfiles[uid]?.name || 'Someone');
-      setTypingUsers(active);
+    const unsub = subscribeToGroupTyping(group.id, user.uid, (activeUids) => {
+      setTypingUsers(activeUids.map(uid => memberProfiles[uid]?.name || 'Someone'));
     });
     return unsub;
   }, [group?.id, memberProfiles]);
